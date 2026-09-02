@@ -65,6 +65,18 @@ interface SigningApi {
         @Path("packetId") packetId: String,
     ): SignaturePacketLegalNoticeAckResponse
 
+    /**
+     * SUX-005 - owner revokes a signer's public signing link by its [jti]. The link/create counterpart
+     * is not surfaced in this Android client; only revoke is wired here. NOT idempotent (mutating POST).
+     */
+    @Headers("Content-Type: application/json")
+    @POST("v1/signature-packets/{packetId}/signers/{signerId}/link/revoke")
+    suspend fun revokeSigningLink(
+        @Path("packetId") packetId: String,
+        @Path("signerId") signerId: String,
+        @Body body: RevokeSigningLinkRequest,
+    ): RevokeSigningLinkResponse
+
     @GET("v1/signature-packets/{packetId}/events")
     suspend fun getEvents(@Path("packetId") packetId: String): SignaturePacketEventsDto
 

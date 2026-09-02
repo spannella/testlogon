@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -31,12 +32,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +57,7 @@ import com.testlogon.android.core.network.signing.SignatureFieldType
 import com.testlogon.android.feature.signing.model.PacketAction
 import com.testlogon.android.feature.signing.model.PacketEvent
 import com.testlogon.android.feature.signing.model.PacketField
+import com.testlogon.android.core.network.signing.PacketRole
 import com.testlogon.android.feature.signing.model.PacketSigner
 import com.testlogon.android.feature.signing.model.SignaturePacket
 import com.testlogon.android.feature.signing.model.primaryAction
@@ -66,6 +73,7 @@ object PacketDetailTestTags {
 
     /** Per-signer row tag, suffixed by the signer id. */
     fun signer(signerId: String): String = "packet_signer_$signerId"
+    fun revokeLink(signerId: String): String = "signing_revoke_link_$signerId"
 
     /** Per-field manifest row tag, suffixed by the field id (PLACEHOLDER for AND-341/342). */
     fun field(fieldId: String): String = "packet_field_$fieldId"
@@ -94,6 +102,7 @@ fun PacketDetailRoute(
                 is PacketDetailEvent.NavigateToSign -> onSign(event.packetId)
                 PacketDetailEvent.PacketSent -> Unit
                 is PacketDetailEvent.ActionFailed -> Unit
+                is PacketDetailEvent.LinkRevoked -> Unit
             }
         }
     }
@@ -102,6 +111,7 @@ fun PacketDetailRoute(
         onBack = onBack,
         onOpenPdf = onOpenPdf,
         onPrimaryAction = viewModel::onPrimaryAction,
+        onRevokeLink = viewModel::revokeSigningLink,
         onRefresh = viewModel::refresh,
         onRetry = viewModel::retry,
         modifier = modifier,
@@ -114,6 +124,7 @@ fun PacketDetailScreen(
     onBack: () -> Unit,
     onOpenPdf: (sourcePath: String) -> Unit,
     onPrimaryAction: () -> Unit,
+    onRevokeLink: (signerId: String, jti: String) -> Unit = { _, _ -> },
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
@@ -143,6 +154,7 @@ fun PacketDetailScreen(
                     state = state,
                     onOpenPdf = onOpenPdf,
                     onPrimaryAction = onPrimaryAction,
+                    onRevokeLink = onRevokeLink,
                     onRefresh = onRefresh,
                 )
 
@@ -161,6 +173,7 @@ private fun ContentBody(
     state: PacketDetailUiState.Content,
     onOpenPdf: (sourcePath: String) -> Unit,
     onPrimaryAction: () -> Unit,
+    onRevokeLink: (signerId: String, jti: String) -> Unit,
     onRefresh: () -> Unit,
 ) {
     val packet = state.packet
@@ -193,7 +206,11 @@ private fun ContentBody(
                 item { EmptyLine(stringResource(R.string.signing_no_signers)) }
             } else {
                 items(packet.signers, key = { it.signerId }) { signer ->
-                    SignerRow(signer)
+                    SignerRow(
+                        signer = signer,
+                        canRevoke = packet.role == PacketRole.SENDER,
+                        onRevokeLink = onRevokeLink,
+                    )
                 }
             }
 
@@ -326,29 +343,78 @@ private fun MetaLine(label: String, value: String) {
 }
 
 @Composable
-private fun SignerRow(signer: PacketSigner) {
+private fun SignerRow(
+    signer: PacketSigner,
+    canRevoke: Boolean = false,
+    onRevokeLink: (signerId: String, jti: String) -> Unit = { _, _ -> },
+) {
+    var showRevoke by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .testTag(PacketDetailTestTags.signer(signer.signerId)),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(text = signer.signerId, style = MaterialTheme.typography.bodyMedium)
-            AssistChip(
-                onClick = {},
-                enabled = false,
-                label = { Text(signer.status) },
-                colors = AssistChipDefaults.assistChipColors(
-                    disabledLabelColor = MaterialTheme.colorScheme.onSurface,
-                ),
-            )
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(text = signer.signerId, style = MaterialTheme.typography.bodyMedium)
+                AssistChip(
+                    onClick = {},
+                    enabled = false,
+                    label = { Text(signer.status) },
+                    colors = AssistChipDefaults.assistChipColors(
+                        disabledLabelColor = MaterialTheme.colorScheme.onSurface,
+                    ),
+                )
+            }
+            if (canRevoke) {
+                OutlinedButton(
+                    onClick = { showRevoke = true },
+                    modifier = Modifier.testTag(PacketDetailTestTags.revokeLink(signer.signerId)),
+                ) { Text("Revoke link") }
+            }
         }
     }
+    if (showRevoke) {
+        RevokeLinkDialog(
+            onDismiss = { showRevoke = false },
+            onConfirm = { jti ->
+                onRevokeLink(signer.signerId, jti)
+                showRevoke = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun RevokeLinkDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (jti: String) -> Unit,
+) {
+    var jti by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Revoke signing link") },
+        text = {
+            OutlinedTextField(
+                value = jti,
+                onValueChange = { jti = it },
+                label = { Text("Link ID (jti)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(jti.trim()) }, enabled = jti.isNotBlank()) {
+                Text("Revoke")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**

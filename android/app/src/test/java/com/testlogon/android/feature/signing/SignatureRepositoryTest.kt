@@ -29,6 +29,8 @@ import com.testlogon.android.core.network.signing.SignatureTemplateVersionDto
 import com.testlogon.android.core.network.signing.SignatureTemplateVersionsDto
 import com.testlogon.android.core.network.signing.CreateSignatureTemplateVersionRequest
 import com.testlogon.android.core.network.signing.SigningApi
+import com.testlogon.android.core.network.signing.RevokeSigningLinkRequest
+import com.testlogon.android.core.network.signing.RevokeSigningLinkResponse
 import com.testlogon.android.feature.signing.data.SignatureRepositoryImpl
 import kotlinx.coroutines.test.runTest
 import okhttp3.MediaType.Companion.toMediaType
@@ -265,6 +267,18 @@ class SignatureRepositoryTest {
         legalNotice = LegalNoticeDto(required = true, accepted = false, version = "v1", text = "notice"),
     )
 
+    @Test
+    fun revokeSigningLink_sendsJti_andMapsResult() = runTest {
+        val api = StubSigningApi(revokeResponse = RevokeSigningLinkResponse(jti = "jti_9", revoked = true))
+        val result = repo(api).revokeSigningLink("pkt_1", "sgn_1", "jti_9")
+
+        assertTrue(result is ApiResult.Success)
+        val data = (result as ApiResult.Success).data
+        assertEquals("jti_9", data.jti)
+        assertTrue(data.revoked)
+        assertEquals(Triple("pkt_1", "sgn_1", "jti_9"), api.revokeCalls.single())
+    }
+
     /**
      * AND-340 - hand-rolled fake [SigningApi]. The three methods this repo uses (getPacket / getEvents /
      * createPacket / sendPacket) serve configured DTOs or throw the configured error and record their args;
@@ -278,6 +292,8 @@ class SignatureRepositoryTest {
         private val packetError: (() -> Throwable)? = null,
         private val fillError: (() -> Throwable)? = null,
         private val markDoneResponse: SignaturePacketMarkDoneResponse = SignaturePacketMarkDoneResponse(),
+        private val revokeResponse: RevokeSigningLinkResponse = RevokeSigningLinkResponse(revoked = true),
+        private val revokeError: (() -> Throwable)? = null,
     ) : SigningApi {
 
         val createBodies = mutableListOf<CreateSignaturePacketRequest>()
@@ -285,6 +301,7 @@ class SignatureRepositoryTest {
         val fillCalls = mutableListOf<Pair<String, SignaturePacketFieldFillRequest>>()
         val markDonePacketIds = mutableListOf<String>()
         val ackPacketIds = mutableListOf<String>()
+        val revokeCalls = mutableListOf<Triple<String, String, String>>()
 
         override suspend fun createPacket(body: CreateSignaturePacketRequest): CreateSignaturePacketResponse {
             createBodies += body
@@ -356,6 +373,16 @@ class SignatureRepositoryTest {
         override suspend fun migrationCheck(
             body: SignatureTemplateMigrationCheckRequest,
         ): SignatureTemplateMigrationListDto = unused()
+
+        override suspend fun revokeSigningLink(
+            packetId: String,
+            signerId: String,
+            body: RevokeSigningLinkRequest,
+        ): RevokeSigningLinkResponse {
+            revokeCalls += Triple(packetId, signerId, body.jti)
+            revokeError?.let { throw it() }
+            return revokeResponse
+        }
 
         private fun unused(): Nothing = throw UnsupportedOperationException("not used in AND-340 tests")
     }

@@ -93,6 +93,13 @@ class SubmitSignViewModelTest {
             markDoneCount++
             return markDoneResult
         }
+
+        override suspend fun revokeSigningLink(
+            packetId: String,
+            signerId: String,
+            jti: String,
+        ): ApiResult<com.testlogon.android.feature.signing.data.RevokeLinkResult> =
+            throw UnsupportedOperationException("not used in submit tests")
     }
 
     private class StubPdfSource(

@@ -5,6 +5,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.feature.signing.capture.model.FieldPlacement
 import com.testlogon.android.feature.signing.capture.model.SignedPacketDraft
 import com.testlogon.android.feature.signing.data.SignatureRepository
+import com.testlogon.android.feature.signing.data.RevokeLinkResult
 import com.testlogon.android.feature.signing.model.PacketEvent
 import com.testlogon.android.feature.signing.model.SignaturePacket
 import com.testlogon.android.feature.signing.model.toDomain
@@ -34,6 +35,8 @@ class FakeSigningRepository(
     var acknowledgeResult: ApiResult<Unit> = ApiResult.Success(Unit),
     var markDoneResult: ApiResult<MarkDoneResult> =
         ApiResult.Success(MarkDoneResult(packetStatus = SigningFixtures.packetDetailDto().status)),
+    var revokeSigningLinkResult: ApiResult<RevokeLinkResult> =
+        ApiResult.Success(RevokeLinkResult(jti = "jti_1", revoked = true)),
 ) : SignatureRepository {
 
     /** Recorded arguments, in call order (BEFORE any configured failure is returned). */
@@ -45,6 +48,7 @@ class FakeSigningRepository(
     val flushedDrafts = mutableListOf<SignedPacketDraft>()
     val acknowledgedPacketIds = mutableListOf<String>()
     val markDonePacketIds = mutableListOf<String>()
+    val revokedLinks = mutableListOf<Triple<String, String, String>>()
 
     /** Records the args of a createDraft call. */
     data class CreateDraftCall(
@@ -98,6 +102,15 @@ class FakeSigningRepository(
     override suspend fun markDone(packetId: String): ApiResult<MarkDoneResult> {
         markDonePacketIds += packetId
         return markDoneResult
+    }
+
+    override suspend fun revokeSigningLink(
+        packetId: String,
+        signerId: String,
+        jti: String,
+    ): ApiResult<RevokeLinkResult> {
+        revokedLinks += Triple(packetId, signerId, jti)
+        return revokeSigningLinkResult
     }
 
     companion object {

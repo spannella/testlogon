@@ -16,6 +16,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -53,6 +54,7 @@ object MaintenanceOrdersTestTags {
     const val FAB = "maintenance_orders_fab"
     const val RETRY = "maintenance_orders_retry"
     const val CREATE_SUBMIT = "maintenance_create_submit"
+    const val VENDORS_ACTION = "maintenance_orders_vendors_action"
 
     fun row(workOrderId: String): String = "maintenance_order_row_$workOrderId"
 }
@@ -60,12 +62,14 @@ object MaintenanceOrdersTestTags {
 @Composable
 fun MaintenanceOrdersRoute(
     onBack: () -> Unit,
+    onOpenVendors: () -> Unit,
     viewModel: MaintenanceOrdersViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     MaintenanceOrdersScreen(
         state = state,
         onBack = onBack,
+        onOpenVendors = onOpenVendors,
         onRefresh = viewModel::refresh,
         onRetry = viewModel::load,
         onCreate = viewModel::create,
@@ -77,6 +81,7 @@ fun MaintenanceOrdersRoute(
 fun MaintenanceOrdersScreen(
     state: MaintenanceOrdersUiState,
     onBack: () -> Unit,
+    onOpenVendors: () -> Unit,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
     onCreate: (propertyId: String, title: String, description: String?, priority: WoPriority) -> Unit,
@@ -92,6 +97,14 @@ fun MaintenanceOrdersScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = onOpenVendors,
+                        modifier = Modifier.testTag(MaintenanceOrdersTestTags.VENDORS_ACTION),
+                    ) {
+                        Icon(Icons.Filled.Group, contentDescription = "Vendors")
                     }
                 },
             )

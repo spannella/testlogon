@@ -5,6 +5,7 @@ import com.squareup.moshi.JsonEncodingException
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.signing.CreateSignaturePacketRequest
+import com.testlogon.android.core.network.signing.RevokeSigningLinkRequest
 import com.testlogon.android.core.network.signing.SigningApi
 import com.testlogon.android.feature.signing.capture.model.FieldPlacement
 import com.testlogon.android.feature.signing.capture.model.SignedPacketDraft
@@ -36,6 +37,15 @@ import javax.inject.Singleton
  * There is NO Room / disk persistence (no migration) and NO poll loop here - refresh is driven by the
  * ViewModel.
  */
+/**
+ * SUX-005 - the outcome of revoking a signer's public signing link: the [jti] that was revoked and
+ * whether the server actually revoked a live token (false when it was already gone / never minted).
+ */
+data class RevokeLinkResult(
+    val jti: String,
+    val revoked: Boolean,
+)
+
 interface SignatureRepository {
 
     /** Reads one packet's full detail (mapped). REUSES AND-339 SigningApi.getPacket. Idempotent GET. */
@@ -88,6 +98,17 @@ interface SignatureRepository {
      * idempotent; the ViewModel blocks duplicate taps.
      */
     suspend fun markDone(packetId: String): ApiResult<MarkDoneResult>
+
+    /**
+     * SUX-005 - the packet OWNER revokes a signer's public signing link by its [jti]. REUSES
+     * SigningApi.revokeSigningLink. Returns the revoke outcome ([RevokeLinkResult]); a 404 (public-link
+     * feature off) degrades to an [ApiResult.Failure] the caller can surface calmly. NOT idempotent.
+     */
+    suspend fun revokeSigningLink(
+        packetId: String,
+        signerId: String,
+        jti: String,
+    ): ApiResult<RevokeLinkResult>
 }
 
 @Singleton
@@ -179,6 +200,21 @@ class SignatureRepositoryImpl @Inject constructor(
                 response.toMarkDoneResult(reloaded)
             }
         }
+
+    override suspend fun revokeSigningLink(
+        packetId: String,
+        signerId: String,
+        jti: String,
+    ): ApiResult<RevokeLinkResult> = withContext(Dispatchers.IO) {
+        call {
+            val response = signingApi.revokeSigningLink(
+                packetId,
+                signerId,
+                RevokeSigningLinkRequest(jti = jti),
+            )
+            RevokeLinkResult(jti = response.jti ?: jti, revoked = response.revoked)
+        }
+    }
 
     /**
      * Folds a block into [ApiResult]. HTTP errors -> Failure (via [ApiErrorParser], preserving the

@@ -7,6 +7,9 @@ import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.maintenance.CreateMaintenanceOrderRequest
 import com.testlogon.android.core.network.maintenance.MaintenanceOrdersApi
 import com.testlogon.android.core.network.maintenance.TransitionMaintenanceOrderRequest
+import com.testlogon.android.core.network.maintenance.VendorCreateRequest
+import com.testlogon.android.core.network.maintenance.VendorPatchRequest
+import com.testlogon.android.core.network.maintenance.VendorStatusRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,7 +20,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * WOV — data layer for the Maintenance Work Orders MVP (list + create + status transition).
+ * WOV — data layer for the Maintenance Work Orders + Vendor directory surface.
  *
  * REUSES the core-network [MaintenanceOrdersApi] (raw DTOs) + shared [ApiErrorParser]; maps each DTO to
  * the feature domain BEFORE the typed [ApiResult] (mirrors SignatureRepositoryImpl). DEGRADE-ON-404: a
@@ -31,6 +34,9 @@ interface MaintenanceOrdersRepository {
         status: WoStatus? = null,
         limit: Int? = null,
     ): ApiResult<List<MaintenanceOrder>>
+
+    /** The static kanban board columns. */
+    suspend fun boardColumns(): ApiResult<List<WoBoardColumn>>
 
     /** Create a property-scoped work order. */
     suspend fun create(
@@ -49,6 +55,41 @@ interface MaintenanceOrdersRepository {
         target: WoStatus,
         costCents: Long? = null,
     ): ApiResult<MaintenanceOrder>
+
+    // ---- Vendor directory (WOV-004) ----
+
+    /** The allowed vendor trade-category tokens. */
+    suspend fun vendorCategories(): ApiResult<List<String>>
+
+    /** List vendors, optionally filtered by status / trade-category. */
+    suspend fun listVendors(
+        status: VendorStatus? = null,
+        tradeCategory: String? = null,
+        limit: Int? = null,
+    ): ApiResult<List<Vendor>>
+
+    /** Read one vendor. */
+    suspend fun getVendor(vendorId: String): ApiResult<Vendor>
+
+    /** Create a vendor. */
+    suspend fun createVendor(
+        name: String,
+        tradeCategory: String,
+        email: String? = null,
+        phone: String? = null,
+    ): ApiResult<Vendor>
+
+    /** Patch a vendor's mutable fields (only non-null fields are sent). */
+    suspend fun updateVendor(
+        vendorId: String,
+        name: String? = null,
+        tradeCategory: String? = null,
+        email: String? = null,
+        phone: String? = null,
+    ): ApiResult<Vendor>
+
+    /** Set a vendor's status (active/inactive). */
+    suspend fun setVendorStatus(vendorId: String, status: VendorStatus): ApiResult<Vendor>
 }
 
 @Singleton
@@ -63,6 +104,11 @@ class MaintenanceOrdersRepositoryImpl @Inject constructor(
                 api.listWorkOrders(woStatus = status?.token, limit = limit)
                     .items.map { it.toDomain() }
             }
+        }
+
+    override suspend fun boardColumns(): ApiResult<List<WoBoardColumn>> =
+        withContext(Dispatchers.IO) {
+            call { api.getBoardColumns().columns.map { it.toDomain() } }
         }
 
     override suspend fun create(
@@ -100,6 +146,72 @@ class MaintenanceOrdersRepositoryImpl @Inject constructor(
             )
             api.transitionWorkOrder(workOrderId, body).toDomain()
         }
+    }
+
+    override suspend fun vendorCategories(): ApiResult<List<String>> =
+        withContext(Dispatchers.IO) {
+            call { api.listVendorCategories().categories }
+        }
+
+    override suspend fun listVendors(
+        status: VendorStatus?,
+        tradeCategory: String?,
+        limit: Int?,
+    ): ApiResult<List<Vendor>> = withContext(Dispatchers.IO) {
+        call {
+            api.listVendors(
+                status = status?.token,
+                tradeCategory = tradeCategory?.takeIf { it.isNotBlank() },
+                limit = limit,
+            ).vendors.map { it.toDomain() }
+        }
+    }
+
+    override suspend fun getVendor(vendorId: String): ApiResult<Vendor> =
+        withContext(Dispatchers.IO) {
+            call { api.getVendor(vendorId).toDomain() }
+        }
+
+    override suspend fun createVendor(
+        name: String,
+        tradeCategory: String,
+        email: String?,
+        phone: String?,
+    ): ApiResult<Vendor> = withContext(Dispatchers.IO) {
+        call {
+            val body = VendorCreateRequest(
+                name = name,
+                tradeCategory = tradeCategory,
+                email = email?.takeIf { it.isNotBlank() },
+                phone = phone?.takeIf { it.isNotBlank() },
+            )
+            api.createVendor(body).toDomain()
+        }
+    }
+
+    override suspend fun updateVendor(
+        vendorId: String,
+        name: String?,
+        tradeCategory: String?,
+        email: String?,
+        phone: String?,
+    ): ApiResult<Vendor> = withContext(Dispatchers.IO) {
+        call {
+            val body = VendorPatchRequest(
+                name = name?.takeIf { it.isNotBlank() },
+                tradeCategory = tradeCategory?.takeIf { it.isNotBlank() },
+                email = email,
+                phone = phone,
+            )
+            api.updateVendor(vendorId, body).toDomain()
+        }
+    }
+
+    override suspend fun setVendorStatus(
+        vendorId: String,
+        status: VendorStatus,
+    ): ApiResult<Vendor> = withContext(Dispatchers.IO) {
+        call { api.setVendorStatus(vendorId, VendorStatusRequest(status.token)).toDomain() }
     }
 
     /** Folds a block into [ApiResult]; mirrors SignatureRepositoryImpl.call. */
