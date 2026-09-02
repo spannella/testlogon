@@ -29,13 +29,17 @@ data class LeadDetailUiState(
     val actionInProgress: Boolean = false,
     val actionMessage: String? = null,
     val conversion: LeadConversionResult? = null,
+    // CRM-AND-LED: duplicate/merge picker
+    val duplicates: List<Lead> = emptyList(),
+    val duplicatesLoading: Boolean = false,
 ) {
     enum class Phase { Loading, Content, Error }
 }
 
 /**
- * CRM-AND-1 — lead detail: the lead + its activity timeline, plus the convert / score / log-activity
- * actions. Keyed by the [ARG_LEAD_ID] nav arg via [SavedStateHandle].
+ * CRM-AND-1 / CRM-AND-LED — lead detail: the lead + its activity timeline, plus convert / score /
+ * log-activity / assign / merge / find-duplicates / delete actions. Keyed by the [ARG_LEAD_ID] nav
+ * arg via [SavedStateHandle].
  */
 @HiltViewModel
 class LeadDetailViewModel @Inject constructor(
@@ -117,6 +121,67 @@ class LeadDetailViewModel @Inject constructor(
                 is ApiResult.Success -> "Activity logged."
                 is ApiResult.Failure -> r.error.message
                 is ApiResult.NetworkError -> "You're offline. Try again."
+            }
+        }
+    }
+
+    /** LED-010: assign this lead to another user by sub. */
+    fun assign(assigneeSub: String) {
+        if (assigneeSub.isBlank()) return
+        runAction {
+            when (val r = repository.assign(leadId, assigneeSub.trim())) {
+                is ApiResult.Success -> "Lead assigned."
+                is ApiResult.Failure -> r.error.message
+                is ApiResult.NetworkError -> "You're offline. Try again."
+            }
+        }
+    }
+
+    /** LED-009: merge a secondary lead into this (primary) lead. */
+    fun merge(secondaryLeadId: String) {
+        if (secondaryLeadId.isBlank()) return
+        runAction {
+            when (val r = repository.merge(leadId, secondaryLeadId.trim())) {
+                is ApiResult.Success -> "Leads merged."
+                is ApiResult.Failure -> r.error.message
+                is ApiResult.NetworkError -> "You're offline. Try again."
+            }
+        }
+    }
+
+    /** LED-009: fetch potential duplicates (by email) for the merge picker. */
+    fun loadDuplicates() {
+        _uiState.update { it.copy(duplicatesLoading = true) }
+        viewModelScope.launch {
+            when (val r = repository.duplicates(leadId)) {
+                is ApiResult.Success -> _uiState.update {
+                    it.copy(duplicatesLoading = false, duplicates = r.data)
+                }
+                is ApiResult.Failure -> _uiState.update {
+                    it.copy(duplicatesLoading = false, actionMessage = r.error.message)
+                }
+                is ApiResult.NetworkError -> _uiState.update {
+                    it.copy(duplicatesLoading = false, actionMessage = "You're offline. Try again.")
+                }
+            }
+        }
+    }
+
+    /** LED-013: delete this lead. Invokes [onDeleted] on success so the caller can pop. */
+    fun delete(onDeleted: () -> Unit) {
+        _uiState.update { it.copy(actionInProgress = true, actionMessage = null) }
+        viewModelScope.launch {
+            when (val r = repository.delete(leadId)) {
+                is ApiResult.Success -> {
+                    _uiState.update { it.copy(actionInProgress = false) }
+                    onDeleted()
+                }
+                is ApiResult.Failure -> _uiState.update {
+                    it.copy(actionInProgress = false, actionMessage = r.error.message)
+                }
+                is ApiResult.NetworkError -> _uiState.update {
+                    it.copy(actionInProgress = false, actionMessage = "You're offline. Try again.")
+                }
             }
         }
     }

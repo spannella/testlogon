@@ -765,6 +765,23 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.APP,
         ),
+        // CRM-AND-LED: prospect pool + admin lead-scoring-rules (degrade-on-404; scoring-rules is server admin-gated).
+        MoreEntry(
+            id = "crm_prospects",
+            labelRes = R.string.more_entry_crm_prospects,
+            icon = Icons.Outlined.Contacts,
+            route = MoreRoutes.CRM_PROSPECTS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "crm_scoring_rules",
+            labelRes = R.string.more_entry_crm_scoring_rules,
+            icon = Icons.Outlined.Tune,
+            route = MoreRoutes.CRM_SCORING_RULES,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.APP,
+        ),
         MoreEntry(
             id = "videos",
             labelRes = R.string.more_entry_videos,

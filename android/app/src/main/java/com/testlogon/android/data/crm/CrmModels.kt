@@ -135,3 +135,82 @@ internal fun StageConfigItemOutDto.toDomain(): StageConfigItem = StageConfigItem
     isWon = isWon,
     isLost = isLost,
 )
+
+// ── CRM-AND-LED: prospect / scoring-rules / score-history domain + mappers ──
+
+/** A marketing prospect (pre-lead contact; LED-007). */
+data class Prospect(
+    val prospectId: String,
+    val email: String,
+    val firstName: String?,
+    val lastName: String?,
+    val phone: String?,
+    val company: String?,
+    val suppressed: Boolean,
+    val createdAt: Long,
+    val updatedAt: Long,
+) {
+    val displayName: String
+        get() = listOfNotNull(firstName?.ifBlank { null }, lastName?.ifBlank { null })
+            .joinToString(" ").ifBlank { email }
+}
+
+/** One entry in a lead's score history (LED-011). */
+data class LeadScoreHistoryEntry(
+    val score: Int,
+    val trigger: String?,
+    val computedAt: Long,
+)
+
+/** A single admin scoring rule (LED-011). */
+data class LeadScoreRule(
+    val field: String,
+    val operator: String,
+    val value: String,
+    val points: Int,
+)
+
+/** The admin scoring-rules set (LED-011 / LED-013). */
+data class LeadScoreRules(
+    val rules: List<LeadScoreRule>,
+    val maxScore: Int,
+    val updatedAt: Long,
+)
+
+internal fun ProspectDto.toDomain(): Prospect = Prospect(
+    prospectId = prospectId,
+    email = email,
+    firstName = firstName,
+    lastName = lastName,
+    phone = phone,
+    company = company,
+    suppressed = suppressed,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+)
+
+internal fun LeadScoreHistoryEntryDto.toDomain(): LeadScoreHistoryEntry = LeadScoreHistoryEntry(
+    score = score,
+    trigger = trigger,
+    computedAt = computedAt,
+)
+
+internal fun LeadScoreRuleDto.toDomain(): LeadScoreRule = LeadScoreRule(
+    field = field,
+    operator = operator,
+    value = value,
+    points = points,
+)
+
+internal fun LeadScoreRule.toDto(): LeadScoreRuleDto = LeadScoreRuleDto(
+    field = field,
+    operator = operator,
+    value = value,
+    points = points,
+)
+
+internal fun LeadScoreRulesDto.toDomain(): LeadScoreRules = LeadScoreRules(
+    rules = rules.map { it.toDomain() },
+    maxScore = maxScore,
+    updatedAt = updatedAt,
+)

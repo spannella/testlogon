@@ -2,6 +2,7 @@
 
 package com.testlogon.android.feature.crm
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,10 +13,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -52,6 +56,7 @@ import java.util.Locale
 object CrmLeadDetailTestTags {
     const val SCREEN = "crm_lead_detail_screen"
     const val CONTENT = "crm_lead_detail_content"
+    const val OVERFLOW = "crm_lead_detail_overflow"
 }
 
 private fun formatDate(tsSeconds: Long): String {
@@ -73,6 +78,10 @@ fun LeadDetailRoute(
         onRecomputeScore = viewModel::recomputeScore,
         onLogActivity = viewModel::logActivity,
         onConvert = viewModel::convert,
+        onAssign = viewModel::assign,
+        onLoadDuplicates = viewModel::loadDuplicates,
+        onMerge = viewModel::merge,
+        onDelete = { viewModel.delete(onDeleted = onBack) },
         onClearActionMessage = viewModel::clearActionMessage,
         modifier = modifier,
     )
@@ -86,12 +95,20 @@ fun LeadDetailScreen(
     onRecomputeScore: () -> Unit,
     onLogActivity: (type: String, subject: String, description: String) -> Unit,
     onConvert: (accountName: String?, createOpportunity: Boolean, opportunityName: String?) -> Unit,
+    onAssign: (assigneeSub: String) -> Unit,
+    onLoadDuplicates: () -> Unit,
+    onMerge: (secondaryLeadId: String) -> Unit,
+    onDelete: () -> Unit,
     onClearActionMessage: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showConvert by remember { mutableStateOf(false) }
     var showLog by remember { mutableStateOf(false) }
+    var showAssign by remember { mutableStateOf(false) }
+    var showMerge by remember { mutableStateOf(false) }
+    var showDelete by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.actionMessage) {
         state.actionMessage?.let {
@@ -109,6 +126,37 @@ fun LeadDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (state.lead != null) {
+                        IconButton(
+                            onClick = { menuOpen = true },
+                            modifier = Modifier.testTag(CrmLeadDetailTestTags.OVERFLOW),
+                        ) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "More actions")
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Assign") },
+                                enabled = !state.actionInProgress,
+                                onClick = { menuOpen = false; showAssign = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Find duplicates / merge") },
+                                enabled = !state.actionInProgress,
+                                onClick = {
+                                    menuOpen = false
+                                    onLoadDuplicates()
+                                    showMerge = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete lead") },
+                                enabled = !state.actionInProgress,
+                                onClick = { menuOpen = false; showDelete = true },
+                            )
+                        }
                     }
                 },
             )
@@ -183,6 +231,38 @@ fun LeadDetailScreen(
             },
         )
     }
+    if (showAssign) {
+        AssignDialog(
+            current = state.lead?.assignedTo.orEmpty(),
+            onDismiss = { showAssign = false },
+            onConfirm = { sub ->
+                onAssign(sub)
+                showAssign = false
+            },
+        )
+    }
+    if (showMerge) {
+        MergeDialog(
+            duplicates = state.duplicates,
+            loading = state.duplicatesLoading,
+            onDismiss = { showMerge = false },
+            onConfirm = { secondaryId ->
+                onMerge(secondaryId)
+                showMerge = false
+            },
+        )
+    }
+    if (showDelete) {
+        AlertDialog(
+            onDismissRequest = { showDelete = false },
+            title = { Text("Delete lead?") },
+            text = { Text("This permanently removes ${state.lead?.fullName ?: "this lead"}.") },
+            confirmButton = {
+                TextButton(onClick = { showDelete = false; onDelete() }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { showDelete = false }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
@@ -195,6 +275,7 @@ private fun LeadSummaryCard(lead: Lead) {
             lead.company?.takeIf { it.isNotBlank() }?.let { InfoLine("Company", it) }
             lead.title?.takeIf { it.isNotBlank() }?.let { InfoLine("Title", it) }
             lead.leadSource?.takeIf { it.isNotBlank() }?.let { InfoLine("Source", it.replace('_', ' ')) }
+            lead.assignedTo?.takeIf { it.isNotBlank() }?.let { InfoLine("Assigned to", it) }
             InfoLine("Status", lead.status.replace('_', ' '))
             InfoLine("Score", "${lead.score} (${bandLabel(lead.score)})")
             lead.description?.takeIf { it.isNotBlank() }?.let {
@@ -280,6 +361,99 @@ private fun ConvertDialog(
         },
         confirmButton = {
             TextButton(onClick = { onConfirm(accountName, makeOpp, oppName) }) { Text("Convert") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun AssignDialog(
+    current: String,
+    onDismiss: () -> Unit,
+    onConfirm: (assigneeSub: String) -> Unit,
+) {
+    var sub by remember { mutableStateOf(current) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Assign lead") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Enter the user id (sub) to assign this lead to.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    sub,
+                    { sub = it },
+                    label = { Text("Assignee user id") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = sub.isNotBlank(), onClick = { onConfirm(sub) }) { Text("Assign") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun MergeDialog(
+    duplicates: List<Lead>,
+    loading: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (secondaryLeadId: String) -> Unit,
+) {
+    var selectedId by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Merge duplicate") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Pick a duplicate to merge into this lead. This lead stays as the primary; blank fields are backfilled from the duplicate.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                when {
+                    loading -> CircularProgressIndicator()
+                    duplicates.isEmpty() -> Text(
+                        "No potential duplicates found.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    else -> duplicates.forEach { d ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedId = d.leadId },
+                            colors = if (d.leadId == selectedId) {
+                                androidx.compose.material3.CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                )
+                            } else {
+                                androidx.compose.material3.CardDefaults.cardColors()
+                            },
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(d.fullName, fontWeight = FontWeight.Medium)
+                                Text(
+                                    listOfNotNull(d.company?.ifBlank { null }, d.email.ifBlank { null }).joinToString(" · "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selectedId != null,
+                onClick = { selectedId?.let(onConfirm) },
+            ) { Text("Merge") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
