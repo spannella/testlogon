@@ -34,6 +34,7 @@ const KycWorkloadPage = lazy(() => import("@/pages/admin/KycWorkloadPage"));
 const KycDocumentTemplatesPage = lazy(() => import("@/pages/admin/KycDocumentTemplatesPage"));
 const KycTranslationsPage = lazy(() => import("@/pages/admin/KycTranslationsPage"));
 const ShareLinksPage = lazy(() => import("@/pages/files/ShareLinksPage"));
+const MountsManagerPage = lazy(() => import("@/pages/files/MountsManagerPage"));
 const PublicDownloadPage = lazy(() => import("@/pages/files/PublicDownloadPage"));
 const ProjectsPage = lazy(() => import("@/pages/projects/ProjectsPage"));
 const ProjectDetailPage = lazy(() => import("@/pages/projects/ProjectDetailPage"));
@@ -552,6 +553,7 @@ export default function App() {
           <Route path="files" element={<FilesPage />} />
           <Route path="files/trading-documents" element={<TradingDocumentsPage />} />
           <Route path="files/share-links" element={<ShareLinksPage />} />
+          <Route path="files/mounts" element={<MountsManagerPage />} />
           <Route path="signing" element={<SigningPage />} />
           <Route path="signing/new" element={<CreateSignatureRequestPage />} />
           <Route path="signing/inbox" element={<SigningInboxPage />} />

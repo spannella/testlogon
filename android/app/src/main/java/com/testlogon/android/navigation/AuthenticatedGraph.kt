@@ -214,6 +214,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         filesDestination(navController)
         // FE-170: Trading Documents area (statements/1099s/confirmations) reached from the file manager.
         tradingDocsDestination(navController)
+        // FM-MOUNTS: file-manager storage-mount management (list/add/edit/test/remove S3 mounts).
+        mountsDestination(navController)
         // Trading Blotter: native orders/fills/positions blotter (web parity; sample data + ticker).
         blotterDestination(navController)
         // Active Algos monitor: client-side TWAP / Iceberg algo progress + pause/cancel.
