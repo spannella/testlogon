@@ -15,9 +15,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +59,9 @@ object CrmCampaignsTestTags {
 @Composable
 fun CrmCampaignsRoute(
     onCampaignClick: (String) -> Unit,
+    onNewCampaign: () -> Unit,
+    onOpenTemplates: () -> Unit,
+    onOpenLeads: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CrmCampaignsViewModel = hiltViewModel(),
@@ -62,6 +70,9 @@ fun CrmCampaignsRoute(
     CrmCampaignsScreen(
         state = state,
         onCampaignClick = onCampaignClick,
+        onNewCampaign = onNewCampaign,
+        onOpenTemplates = onOpenTemplates,
+        onOpenLeads = onOpenLeads,
         onBack = onBack,
         onRefresh = viewModel::onRefresh,
         onRetry = viewModel::onRetry,
@@ -73,6 +84,9 @@ fun CrmCampaignsRoute(
 fun CrmCampaignsScreen(
     state: CrmCampaignsUiState,
     onCampaignClick: (String) -> Unit,
+    onNewCampaign: () -> Unit,
+    onOpenTemplates: () -> Unit,
+    onOpenLeads: () -> Unit,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
@@ -88,7 +102,22 @@ fun CrmCampaignsScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                actions = {
+                    IconButton(onClick = onOpenLeads) {
+                        Icon(Icons.Filled.Person, contentDescription = "Web leads")
+                    }
+                    IconButton(onClick = onOpenTemplates) {
+                        Icon(Icons.Filled.Edit, contentDescription = "Email templates")
+                    }
+                },
             )
+        },
+        floatingActionButton = {
+            if (state.phase == CrmCampaignsUiState.Phase.Content && !state.moduleDisabled) {
+                FloatingActionButton(onClick = onNewCampaign) {
+                    Icon(Icons.Filled.Add, contentDescription = "New campaign")
+                }
+            }
         },
     ) { padding ->
         when (state.phase) {
@@ -157,17 +186,19 @@ private fun CampaignRow(campaign: CrmCampaign, onClick: () -> Unit) {
 @Composable
 fun CrmCampaignDetailRoute(
     onBack: () -> Unit,
+    onEdit: (String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CrmCampaignDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    CrmCampaignDetailScreen(state = state, onBack = onBack, onRetry = viewModel::onRetry, modifier = modifier)
+    CrmCampaignDetailScreen(state = state, onBack = onBack, onEdit = onEdit, onRetry = viewModel::onRetry, modifier = modifier)
 }
 
 @Composable
 fun CrmCampaignDetailScreen(
     state: CrmCampaignDetailUiState,
     onBack: () -> Unit,
+    onEdit: (String) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -179,6 +210,14 @@ fun CrmCampaignDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    val id = state.campaign?.campaignId
+                    if (id != null) {
+                        IconButton(onClick = { onEdit(id) }) {
+                            Icon(Icons.Filled.Edit, contentDescription = "Edit campaign")
+                        }
                     }
                 },
             )
@@ -213,9 +252,15 @@ fun CrmCampaignDetailScreen(
                         LabeledValue("Sent", attr.totalSent.toString())
                         LabeledValue("Opens", "${attr.openCount} (${CrmPecMath.formatRate(attr.openRate)})")
                         LabeledValue("Clicks", "${attr.clickCount} (${CrmPecMath.formatRate(attr.clickRate)})")
-                    } else {
+                    }
+                    val ab = state.abResults
+                    if (ab != null) {
+                        HorizontalDivider()
+                        AbResultsSection(ab)
+                    }
+                    if (attr == null && ab == null) {
                         Text(
-                            "Full campaign editing and A/B testing live in the web console.",
+                            "Tap the edit action to configure audience, send, preview, or run an A/B test.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

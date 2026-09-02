@@ -433,3 +433,179 @@ data class CrmProjectAddContactLinkInDto(
     @Json(name = "linked_entity_type") val linkedEntityType: String? = null,
     @Json(name = "note") val note: String? = null,
 )
+
+// ─────────────────  CAMPAIGNS: CMP additions  ─────────────────
+// CMP-001..CMP-008 — campaign CRUD/send/preview/ab-results + email-template editor + admin leads.
+// Mirrors frontend/src/api/endpoints/crmCampaigns.ts + crmEmail.ts (app/routers/crm_campaigns.py).
+
+// Full campaign shape (extends the compact list DTO's fields the earlier list view used).
+@JsonClass(generateAdapter = true)
+data class CrmCampaignFullDto(
+    @Json(name = "campaign_id") val campaignId: String = "",
+    @Json(name = "owner_id") val ownerId: String? = null,
+    @Json(name = "name") val name: String = "",
+    @Json(name = "status") val status: String = "",
+    @Json(name = "objective") val objective: String? = null,
+    @Json(name = "budget_cents") val budgetCents: Long = 0,
+    @Json(name = "contact_list_ids") val contactListIds: List<String> = emptyList(),
+    @Json(name = "segment_ids") val segmentIds: List<String> = emptyList(),
+    @Json(name = "tracking_code") val trackingCode: String? = null,
+    @Json(name = "email_template_id") val emailTemplateId: String? = null,
+    @Json(name = "questionnaire_id") val questionnaireId: String? = null,
+    @Json(name = "questionnaire_url") val questionnaireUrl: String? = null,
+    @Json(name = "campaign_type") val campaignType: String = "email",
+    @Json(name = "variants") val variants: List<Map<String, Any?>>? = null,
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "updated_at") val updatedAt: Long = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmCampaignCreateInDto(
+    @Json(name = "name") val name: String,
+    @Json(name = "objective") val objective: String? = null,
+    @Json(name = "budget_cents") val budgetCents: Long? = null,
+    @Json(name = "contact_list_ids") val contactListIds: List<String>? = null,
+    @Json(name = "segment_ids") val segmentIds: List<String>? = null,
+    @Json(name = "tracking_code") val trackingCode: String? = null,
+    @Json(name = "start_date") val startDate: String? = null,
+    @Json(name = "end_date") val endDate: String? = null,
+    @Json(name = "campaign_type") val campaignType: String? = null,
+    @Json(name = "email_template_id") val emailTemplateId: String? = null,
+    @Json(name = "questionnaire_id") val questionnaireId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmCampaignUpdateInDto(
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "objective") val objective: String? = null,
+    @Json(name = "budget_cents") val budgetCents: Long? = null,
+    @Json(name = "contact_list_ids") val contactListIds: List<String>? = null,
+    @Json(name = "segment_ids") val segmentIds: List<String>? = null,
+    @Json(name = "tracking_code") val trackingCode: String? = null,
+    @Json(name = "start_date") val startDate: String? = null,
+    @Json(name = "end_date") val endDate: String? = null,
+    @Json(name = "campaign_type") val campaignType: String? = null,
+    @Json(name = "email_template_id") val emailTemplateId: String? = null,
+    @Json(name = "questionnaire_id") val questionnaireId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmCampaignSendInDto(
+    @Json(name = "dry_run") val dryRun: Boolean = false,
+    @Json(name = "snapshot_ts") val snapshotTs: Long? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmCampaignSendOutDto(
+    @Json(name = "campaign_id") val campaignId: String = "",
+    @Json(name = "total_resolved") val totalResolved: Int = 0,
+    @Json(name = "total_sent") val totalSent: Int = 0,
+    @Json(name = "total_skipped") val totalSkipped: Int = 0,
+    @Json(name = "dry_run") val dryRun: Boolean = false,
+    @Json(name = "send_id") val sendId: String? = null,
+)
+
+// CMP-007 — A/B test results.
+@JsonClass(generateAdapter = true)
+data class CrmAbVariantStatsDto(
+    @Json(name = "variant_id") val variantId: String = "",
+    @Json(name = "label") val label: String = "",
+    @Json(name = "sent") val sent: Int = 0,
+    @Json(name = "opens") val opens: Int = 0,
+    @Json(name = "clicks") val clicks: Int = 0,
+    @Json(name = "open_rate") val openRate: Double = 0.0,
+    @Json(name = "click_rate") val clickRate: Double = 0.0,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmAbResultsDto(
+    @Json(name = "campaign_id") val campaignId: String = "",
+    @Json(name = "variant_stats") val variantStats: List<CrmAbVariantStatsDto> = emptyList(),
+)
+
+// CMP-008 — merge-tag email preview.
+@JsonClass(generateAdapter = true)
+data class CrmEmailPreviewInDto(
+    @Json(name = "sample_party_id") val samplePartyId: String? = null,
+    @Json(name = "sample_vars") val sampleVars: Map<String, String> = emptyMap(),
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmEmailPreviewOutDto(
+    @Json(name = "subject") val subject: String = "",
+    @Json(name = "body_text") val bodyText: String = "",
+    @Json(name = "body_html") val bodyHtml: String? = null,
+    @Json(name = "merge_vars_used") val mergeVarsUsed: Map<String, String> = emptyMap(),
+    @Json(name = "merge_vars_missing") val mergeVarsMissing: List<String> = emptyList(),
+)
+
+// CMP-002 — HTML email templates.
+@JsonClass(generateAdapter = true)
+data class CrmEmailTemplateDto(
+    @Json(name = "template_id") val templateId: String = "",
+    @Json(name = "owner_id") val ownerId: String? = null,
+    @Json(name = "name") val name: String = "",
+    @Json(name = "subject_template") val subjectTemplate: String = "",
+    @Json(name = "body_html_template") val bodyHtmlTemplate: String = "",
+    @Json(name = "variables") val variables: List<String> = emptyList(),
+    @Json(name = "status") val status: String = "draft",
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "updated_at") val updatedAt: Long = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmEmailTemplateListRespDto(
+    @Json(name = "templates") val templates: List<CrmEmailTemplateDto> = emptyList(),
+    @Json(name = "cursor") val cursor: String? = null,
+    @Json(name = "count") val count: Int = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmEmailTemplateCreateInDto(
+    @Json(name = "name") val name: String,
+    @Json(name = "subject_template") val subjectTemplate: String,
+    @Json(name = "body_html_template") val bodyHtmlTemplate: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmEmailTemplateUpdateInDto(
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "subject_template") val subjectTemplate: String? = null,
+    @Json(name = "body_html_template") val bodyHtmlTemplate: String? = null,
+    @Json(name = "status") val status: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmEmailTemplatePreviewInDto(
+    @Json(name = "sample_vars") val sampleVars: Map<String, String> = emptyMap(),
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmEmailTemplatePreviewOutDto(
+    @Json(name = "subject") val subject: String = "",
+    @Json(name = "body_html") val bodyHtml: String = "",
+    @Json(name = "variables") val variables: List<String> = emptyList(),
+    @Json(name = "missing_vars") val missingVars: List<String> = emptyList(),
+)
+
+// CMP-006 — admin web-to-lead list (server returns leads as loose dicts).
+@JsonClass(generateAdapter = true)
+data class CrmWebLeadDto(
+    @Json(name = "capture_id") val captureId: String = "",
+    @Json(name = "first_name") val firstName: String? = null,
+    @Json(name = "last_name") val lastName: String? = null,
+    @Json(name = "email") val email: String? = null,
+    @Json(name = "phone") val phone: String? = null,
+    @Json(name = "company") val company: String? = null,
+    @Json(name = "message") val message: String? = null,
+    @Json(name = "campaign_id") val campaignId: String? = null,
+    @Json(name = "source_ip") val sourceIp: String? = null,
+    @Json(name = "created_at") val createdAt: Long? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmWebLeadListRespDto(
+    @Json(name = "leads") val leads: List<CrmWebLeadDto> = emptyList(),
+    @Json(name = "cursor") val cursor: String? = null,
+    @Json(name = "count") val count: Int = 0,
+)
