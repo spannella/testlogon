@@ -318,21 +318,23 @@ private fun ActionDialog(
     onDismiss: () -> Unit,
     onAction: (Ec2Action) -> Unit,
 ) {
-    val running = status.equals("running", ignoreCase = true)
-    val stopped = status.equals("stopped", ignoreCase = true)
+    // Pure, unit-tested source of truth for which lifecycle actions this status permits.
+    val allowed = Ec2InstanceMath.allowedActions(status)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Instance actions") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!running) {
+                if (Ec2Action.START in allowed) {
                     Button(onClick = { onAction(Ec2Action.START) }, modifier = Modifier.fillMaxWidth()) { Text("Start") }
                 }
-                if (running) {
+                if (Ec2Action.STOP in allowed) {
                     Button(onClick = { onAction(Ec2Action.STOP) }, modifier = Modifier.fillMaxWidth()) { Text("Stop") }
+                }
+                if (Ec2Action.REBOOT in allowed) {
                     OutlinedButton(onClick = { onAction(Ec2Action.REBOOT) }, modifier = Modifier.fillMaxWidth()) { Text("Reboot") }
                 }
-                if (stopped || running) {
+                if (Ec2Action.TERMINATE in allowed) {
                     OutlinedButton(onClick = { onAction(Ec2Action.TERMINATE) }, modifier = Modifier.fillMaxWidth()) { Text("Terminate") }
                 }
             }
