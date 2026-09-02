@@ -15,7 +15,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import retrofit2.Retrofit
+import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.PATCH
 import retrofit2.http.Path
 import retrofit2.http.Query
 import java.io.IOException
@@ -26,8 +28,9 @@ import javax.inject.Singleton
 /**
  * B7 Cloud-Infra: Instance monitoring (metrics for an instance). Mirrors InstanceMonitoringPage.tsx +
  * api/endpoints/instanceMonitoring.ts. Backend: instance_monitoring.py, prefix /ui/compute/monitoring,
- * require_ui_session (ownership via the instance). Reads latest metric, a series, and a health summary.
- * The ingest/seed endpoints are test-only and NOT surfaced here. Self-contained per the B5 pattern.
+ * require_ui_session (ownership via the instance). Reads latest metric, a series, a health summary, the
+ * auto-restart policy (PATCH to update), and a lifecycle event timeline. The ingest/seed endpoints are
+ * dev-only and NOT surfaced here. Self-contained per the B5 pattern.
  */
 interface InstanceMonitoringApi {
 
@@ -42,6 +45,18 @@ interface InstanceMonitoringApi {
 
     @GET("ui/compute/monitoring/instances/{id}/health")
     suspend fun health(@Path("id") instanceId: String): InstanceHealthDto
+
+    @GET("ui/compute/monitoring/instances/{id}/timeline")
+    suspend fun timeline(
+        @Path("id") instanceId: String,
+        @Query("limit") limit: Int? = null,
+    ): InstanceTimelineDto
+
+    @PATCH("ui/compute/monitoring/instances/{id}/restart-policy")
+    suspend fun updateRestartPolicy(
+        @Path("id") instanceId: String,
+        @Body body: RestartPolicyPatch,
+    ): RestartPolicyDto
 }
 
 @JsonClass(generateAdapter = true)
@@ -84,15 +99,62 @@ data class InstanceHealthDto(
     @Json(name = "last_metric_ts") val lastMetricTs: Long = 0L,
 )
 
-/** Aggregate for one instance's monitoring view. */
+/** Auto-restart policy for an instance (GAP-0230). Mirrors RestartPolicyOut. */
+@JsonClass(generateAdapter = true)
+data class RestartPolicyDto(
+    @Json(name = "instance_id") val instanceId: String = "",
+    @Json(name = "resource_type") val resourceType: String = "ec2",
+    @Json(name = "auto_restart_enabled") val autoRestartEnabled: Boolean = false,
+    @Json(name = "max_restarts") val maxRestarts: Int = 3,
+    @Json(name = "restart_count") val restartCount: Int = 0,
+    @Json(name = "last_restart_at") val lastRestartAt: Long = 0L,
+)
+
+/** PATCH body for the restart policy; both fields optional (partial update). Mirrors RestartPolicyIn. */
+@JsonClass(generateAdapter = true)
+data class RestartPolicyPatch(
+    @Json(name = "auto_restart_enabled") val autoRestartEnabled: Boolean? = null,
+    @Json(name = "max_restarts") val maxRestarts: Int? = null,
+)
+
+/** One lifecycle event on an instance timeline (GAP-0231). Mirrors TimelineEventOut. */
+@JsonClass(generateAdapter = true)
+data class TimelineEventDto(
+    @Json(name = "event_id") val eventId: String = "",
+    @Json(name = "event_type") val eventType: String = "",
+    @Json(name = "ts") val ts: Long = 0L,
+    @Json(name = "detail") val detail: Map<String, Any?> = emptyMap(),
+)
+
+/** Ordered lifecycle event timeline for an instance. Mirrors InstanceTimelineOut. */
+@JsonClass(generateAdapter = true)
+data class InstanceTimelineDto(
+    @Json(name = "instance_id") val instanceId: String = "",
+    @Json(name = "resource_type") val resourceType: String = "ec2",
+    @Json(name = "events") val events: List<TimelineEventDto> = emptyList(),
+)
+
+/**
+ * Aggregate for one instance's monitoring view. [restartPolicy] and [timeline] degrade to null / empty
+ * when the (newer) backend routes 404 or the deployment predates them.
+ */
 data class MonitoringSnapshot(
     val health: InstanceHealthDto,
     val series: List<MetricPointDto>,
     val latest: MetricPointDto?,
+    val restartPolicy: RestartPolicyDto? = null,
+    val timeline: List<TimelineEventDto> = emptyList(),
 )
 
 interface InstanceMonitoringRepository {
     suspend fun snapshot(instanceId: String): ApiResult<MonitoringSnapshot>
+
+    /** Update the auto-restart policy (partial). Returns the reconciled policy. */
+    suspend fun updateRestartPolicy(
+        instanceId: String,
+        autoRestartEnabled: Boolean? = null,
+        maxRestarts: Int? = null,
+    ): ApiResult<RestartPolicyDto>
 }
 
 @Singleton
@@ -109,9 +171,49 @@ class DefaultInstanceMonitoringRepository @Inject constructor(
                 val health = api.health(instanceId)
                 val series = api.series(instanceId, limit = 60).points
                 val latest = api.latest(instanceId).point
-                MonitoringSnapshot(health = health, series = series, latest = latest)
+                // restart-policy + timeline are newer, optional routes: degrade to null/empty on 404
+                // (older deployments) rather than failing the whole snapshot.
+                val restartPolicy = optional { api.updateRestartPolicyNoop(instanceId) }
+                val timeline = optional { api.timeline(instanceId, limit = 50).events } ?: emptyList()
+                MonitoringSnapshot(
+                    health = health,
+                    series = series,
+                    latest = latest,
+                    restartPolicy = restartPolicy,
+                    timeline = timeline,
+                )
             }
         }
+
+    override suspend fun updateRestartPolicy(
+        instanceId: String,
+        autoRestartEnabled: Boolean?,
+        maxRestarts: Int?,
+    ): ApiResult<RestartPolicyDto> = withContext(io) {
+        call {
+            api.updateRestartPolicy(
+                instanceId,
+                RestartPolicyPatch(autoRestartEnabled = autoRestartEnabled, maxRestarts = maxRestarts),
+            )
+        }
+    }
+
+    /** Read the current policy via an empty PATCH (partial update with no fields is a safe read). */
+    private suspend fun InstanceMonitoringApi.updateRestartPolicyNoop(instanceId: String): RestartPolicyDto =
+        updateRestartPolicy(instanceId, RestartPolicyPatch())
+
+    /** Run [block], swallowing 404 / not-found and any error into null so optional routes degrade. */
+    private suspend fun <T> optional(block: suspend () -> T): T? = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: HttpException) {
+        null
+    } catch (e: JsonDataException) {
+        null
+    } catch (e: IOException) {
+        null
+    }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())

@@ -18,7 +18,8 @@ import javax.inject.Inject
 /**
  * B7 Cloud-Infra: Instance monitoring. The web reaches this per-instance from the EC2 detail; on mobile
  * (no direct sidebar route) we let the user pick one of their instances, then load its health + metric
- * series. Reuses the EC2 repository for the instance picker. 403 -> Forbidden.
+ * series + lifecycle timeline + auto-restart policy. Reuses the EC2 repository for the instance picker.
+ * 403 -> Forbidden.
  */
 sealed interface MonitoringPickerState {
     data object Loading : MonitoringPickerState
@@ -39,6 +40,7 @@ data class MonitoringUiState(
     val picker: MonitoringPickerState = MonitoringPickerState.Loading,
     val selectedInstanceId: String? = null,
     val detail: MonitoringDetailState = MonitoringDetailState.Idle,
+    val policyUpdating: Boolean = false,
     val transientError: AdminOpsErrorType? = null,
 )
 
@@ -114,6 +116,26 @@ class InstanceMonitoringViewModel @Inject constructor(
                 is ApiResult.NetworkError -> _state.value =
                     _state.value.copy(detail = MonitoringDetailState.Error(AdminOpsErrorType.NETWORK))
             }
+        }
+    }
+
+    /** Flip the auto-restart policy for the selected instance, then refresh the detail. */
+    fun setAutoRestart(enabled: Boolean) {
+        val instanceId = _state.value.selectedInstanceId ?: return
+        if (_state.value.policyUpdating) return
+        _state.value = _state.value.copy(policyUpdating = true)
+        viewModelScope.launch {
+            val r = monitoringRepo.updateRestartPolicy(instanceId, autoRestartEnabled = enabled)
+            _state.value = _state.value.copy(
+                policyUpdating = false,
+                transientError = when (r) {
+                    is ApiResult.Success -> null
+                    is ApiResult.Failure ->
+                        if (r.error.status == 401) AdminOpsErrorType.AUTH else AdminOpsErrorType.SERVER
+                    is ApiResult.NetworkError -> AdminOpsErrorType.NETWORK
+                },
+            )
+            if (r is ApiResult.Success) loadDetail(instanceId)
         }
     }
 
