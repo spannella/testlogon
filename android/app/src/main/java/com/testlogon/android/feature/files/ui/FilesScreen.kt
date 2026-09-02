@@ -33,6 +33,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.FolderShared
+import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Folder
@@ -151,6 +153,8 @@ object FilesTestTags {
     /** AND-336 - the import-from-Google-Drive top-bar affordance. */
     const val DRIVE_IMPORT = "files_drive_import"
     const val MOUNTS = "files_mounts"
+    const val STORAGE_USAGE = "files_storage_usage"
+    const val SHARED_WITH_ME = "files_shared_with_me"
 
     /** Per-breadcrumb tag: files_breadcrumb_<index>. */
     fun breadcrumb(index: Int): String = "files_breadcrumb_$index"
@@ -237,6 +241,12 @@ fun FilesRoute(
     // FM-MOUNTS - open the storage-mount management area (add/list/test/remove providers). Defaults
     // no-op so existing call sites / tests are unaffected.
     onOpenMounts: () -> Unit = {},
+    // FM-SHARE - open the storage-usage view (total + largest files + daily transfer). Defaults no-op
+    // so existing call sites / tests are unaffected.
+    onOpenStorageUsage: () -> Unit = {},
+    // FM-SHARE - open the "shared with me" inbound-shares list. Defaults no-op so existing call sites /
+    // tests are unaffected.
+    onOpenSharedWithMe: () -> Unit = {},
     viewModel: FilesViewModel = hiltViewModel(),
     uploadViewModel: com.testlogon.android.feature.files.upload.FilesUploadViewModel = hiltViewModel(),
     downloadViewModel: com.testlogon.android.feature.files.download.FileActionsViewModel = hiltViewModel(),
@@ -334,6 +344,9 @@ fun FilesRoute(
         onOpenTradingDocuments = onOpenTradingDocuments,
         // FM-MOUNTS - the storage-mounts entry point (a top-bar action).
         onOpenMounts = onOpenMounts,
+        // FM-SHARE - storage-usage + shared-with-me entry points (top-bar actions).
+        onOpenStorageUsage = onOpenStorageUsage,
+        onOpenSharedWithMe = onOpenSharedWithMe,
         // F13 - long-press CRUD context-menu actions wired to the existing FilesViewModel ops.
         onRename = { node, newName -> viewModel.rename(node.path, newName, node.type == FileNodeType.FOLDER) },
         onDelete = { node -> viewModel.delete(node.path, node.type == FileNodeType.FOLDER) },
@@ -411,6 +424,11 @@ fun FilesScreen(
     // FM-MOUNTS - storage-mounts entry point (null -> the action is hidden, so existing FilesScreen
     // callers / tests are unaffected).
     onOpenMounts: (() -> Unit)? = null,
+    // FM-SHARE - storage-usage entry point (null -> the action is hidden, so existing callers/tests
+    // are unaffected).
+    onOpenStorageUsage: (() -> Unit)? = null,
+    // FM-SHARE - shared-with-me entry point (null -> the action is hidden).
+    onOpenSharedWithMe: (() -> Unit)? = null,
     // F13 - long-press context-menu CRUD actions (defaulted no-op so existing callers / tests are
     // unaffected). Rename/Delete/New-folder are fully wired; Move targets a destination folder path.
     onRename: (FileNode, String) -> Unit = { _, _ -> },
@@ -487,6 +505,30 @@ fun FilesScreen(
                             Icon(
                                 Icons.Outlined.Storage,
                                 contentDescription = "Storage mounts",
+                            )
+                        }
+                    }
+                    // FM-SHARE - "shared with me" inbound-shares affordance (only when wired).
+                    if (onOpenSharedWithMe != null && !state.isSearching) {
+                        IconButton(
+                            onClick = onOpenSharedWithMe,
+                            modifier = Modifier.testTag(FilesTestTags.SHARED_WITH_ME),
+                        ) {
+                            Icon(
+                                Icons.Outlined.FolderShared,
+                                contentDescription = "Shared with me",
+                            )
+                        }
+                    }
+                    // FM-SHARE - storage-usage affordance (only when wired).
+                    if (onOpenStorageUsage != null && !state.isSearching) {
+                        IconButton(
+                            onClick = onOpenStorageUsage,
+                            modifier = Modifier.testTag(FilesTestTags.STORAGE_USAGE),
+                        ) {
+                            Icon(
+                                Icons.Outlined.PieChart,
+                                contentDescription = "Storage usage",
                             )
                         }
                     }
