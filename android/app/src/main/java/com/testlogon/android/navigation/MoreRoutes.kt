@@ -480,6 +480,15 @@ object MoreRoutes {
     const val ADMIN_EMAIL_DASHBOARD = MessagingDashboardDest.EMAIL_ROUTE
     const val ADMIN_SMS_DASHBOARD = MessagingDashboardDest.SMS_ROUTE
 
+    // Admin EMAIL management (router app/routers/admin_email.py, /ui/admin/email; require_admin_or_root):
+    // campaign-template CRUD + suppressed-list mgmt + delivery-stats header. DISTINCT from the AND-404
+    // READ-ONLY delivery dashboard above. operatorOnly; self-gates via AdminRoleProvider + backend 403.
+    const val ADMIN_EMAIL_MANAGE = AdminEmailDest.ROUTE
+
+    // CUS-004 Financial Products + Collections admin (router app/routers/financial_products.py,
+    // /ui/financial-products; require_admin_or_root). operatorOnly; self-gates via AdminRoleProvider + 403.
+    const val FINANCIAL_PRODUCTS = FinancialProductsDest.ROUTE
+
     // B5: admin content-moderation board (queue + ticket detail + claim/decision/resolve).
     const val ADMIN_MODERATION = ModerationBoardDest.ROUTE
 
@@ -804,6 +813,8 @@ object MoreRoutes {
             ACTIVITY_CENTER,
             ADMIN_EMAIL_DASHBOARD,
             ADMIN_SMS_DASHBOARD,
+            ADMIN_EMAIL_MANAGE,
+            FINANCIAL_PRODUCTS,
             ADMIN_MODERATION,
             ADMIN_AD_CREATIVE_REVIEW,
             ADMIN_AD_FRAUD,

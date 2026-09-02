@@ -5201,6 +5201,16 @@
     <string name="more_entry_stylist">Design (Stylist)</string>
     <string name="more_entry_marketing">Marketing</string>
     <string name="more_entry_marketing_campaigns">Marketing campaigns</string>
+    <!-- Admin email management + financial products (operator-only More entries + snackbars) -->
+    <string name="more_entry_admin_email_manage">Email admin</string>
+    <string name="more_entry_financial_products">Financial products</string>
+    <string name="admin_email_template_created">Template created</string>
+    <string name="admin_email_template_deactivated">Template deactivated</string>
+    <string name="admin_email_unsuppressed">Address unsuppressed</string>
+    <string name="admin_email_action_failed">Action failed</string>
+    <string name="finprod_product_created">Product created</string>
+    <string name="finprod_collection_created">Collection created</string>
+    <string name="finprod_action_failed">Action failed</string>
     <!-- Marketing campaigns (OFBiz MKT) hub -->
     <string name="mktc_campaign_created">Campaign created</string>
     <string name="mktc_list_created">List created</string>

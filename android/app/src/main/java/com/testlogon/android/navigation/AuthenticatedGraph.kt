@@ -430,6 +430,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // B4 web-parity: Marketing content agent (dashboard + editor + calendar + engagement).
         marketingDestinations(navController)
         marketingCampaignsDestinations(navController)
+        // Admin EMAIL management (templates + suppressed + stats header). operator-only; self-gates.
+        adminEmailDestinations(navController)
+        // CUS-004 Financial Products + Collections admin. operator-only; self-gates.
+        financialProductsDestinations(navController)
         // B4 web-parity: Accountant/cost agent (overview + breakdown + budgets + alerts).
         costsDestinations(navController)
         // B4 web-parity: Compliance/Security agent (findings + audits + compliance + trends).
