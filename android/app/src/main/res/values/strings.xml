@@ -4820,6 +4820,7 @@
     <!-- web-route parity batch: ideas / licenses / watch-parties / bots -->
     <string name="more_entry_ideas">Ideas</string>
     <string name="more_entry_agent_configs">Agent Type Configs</string>
+    <string name="more_entry_agent_run">Agent Run Console</string>
     <string name="more_entry_workers">Agent Workers</string>
     <string name="more_entry_llm_keys">LLM Keys</string>
     <string name="more_entry_fleet">Agent Fleet</string>

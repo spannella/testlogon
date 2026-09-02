@@ -251,6 +251,8 @@ object MoreRoutes {
     const val IDEAS = IdeasDest.ROUTE
     const val LICENSES = LicensesDest.ROUTE
     const val AGENT_CONFIGS = AgentConfigsHubDest.ROUTE
+    // AGENT-RUN web-parity: generic agent-run console hub (execute + approve/reject). operatorOnly.
+    const val AGENT_RUN = AgentRunHubDest.ROUTE
 
     // AGENTS-BASICS web-parity: workers (list/detail/sessions + create). require_ui_session (usable).
     val WORKERS: String get() = WorkersListDest.ROUTE
@@ -729,6 +731,7 @@ object MoreRoutes {
             IDEAS,
             LICENSES,
             AGENT_CONFIGS,
+            AGENT_RUN,
             WORKERS,
             LLM_KEYS,
             FLEET,
