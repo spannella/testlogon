@@ -52,7 +52,9 @@ import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.sshbastion.BastionHopReq
 import com.testlogon.android.data.sshbastion.BastionPathDto
 import com.testlogon.android.data.sshbastion.CreateBastionPathReq
+import com.testlogon.android.data.sshbastion.UpdateBastionPathReq
 import com.testlogon.android.feature.infracommon.infraErrorMessage
+import com.testlogon.android.data.infrasweep.InfraSweepMath
 
 object SshBastionTestTags {
     const val SCREEN = "sshbastion_screen"
@@ -66,6 +68,7 @@ object SshBastionTestTags {
     const val FORM_TARGET_HOST = "sshbastion_form_target_host"
     const val FORM_CONFIRM = "sshbastion_form_confirm"
     fun row(id: String) = "sshbastion_row_$id"
+    fun edit(id: String) = "sshbastion_edit_$id"
     fun resolve(id: String) = "sshbastion_resolve_$id"
     fun delete(id: String) = "sshbastion_delete_$id"
 }
@@ -82,6 +85,7 @@ fun SshBastionRoute(
         onRefresh = viewModel::refresh,
         onRetry = viewModel::retry,
         onCreate = viewModel::create,
+        onUpdate = viewModel::update,
         onResolve = viewModel::resolve,
         onDelete = viewModel::delete,
         onDismissResolved = viewModel::dismissResolved,
@@ -96,6 +100,7 @@ fun SshBastionScreen(
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
     onCreate: (CreateBastionPathReq) -> Unit,
+    onUpdate: (String, UpdateBastionPathReq) -> Unit,
     onResolve: (String) -> Unit,
     onDelete: (String) -> Unit,
     onDismissResolved: () -> Unit,
@@ -105,6 +110,7 @@ fun SshBastionScreen(
     val snackbar = remember { SnackbarHostState() }
     var showCreate by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<BastionPathDto?>(null) }
+    var editTarget by remember { mutableStateOf<BastionPathDto?>(null) }
     val clipboard = LocalClipboardManager.current
 
     LaunchedEffect(state.message, state.transientError) {
@@ -172,6 +178,7 @@ fun SshBastionScreen(
                             path = p,
                             inFlight = state.actionInFlightId == p.pathId,
                             actionsEnabled = state.actionInFlightId == null,
+                            onEdit = { editTarget = p },
                             onResolve = { onResolve(p.pathId) },
                             onDelete = { deleteTarget = p },
                         )
@@ -184,8 +191,45 @@ fun SshBastionScreen(
     if (showCreate) {
         BastionFormDialog(
             mutating = state.mutating,
+            existing = null,
             onDismiss = { showCreate = false },
-            onSubmit = { onCreate(it); showCreate = false },
+            onSubmitFields = { label, description, jumpHost, jumpUser, targetHost, targetUser ->
+                val jumps = if (jumpHost.isNotBlank()) {
+                    listOf(BastionHopReq(hostname = jumpHost.trim(), username = jumpUser.trim(), label = "bastion"))
+                } else emptyList()
+                onCreate(
+                    CreateBastionPathReq(
+                        label = label.trim(),
+                        description = description.trim(),
+                        jumpHops = jumps,
+                        target = BastionHopReq(hostname = targetHost.trim(), username = targetUser.trim(), label = "target"),
+                    ),
+                )
+                showCreate = false
+            },
+        )
+    }
+
+    editTarget?.let { p ->
+        BastionFormDialog(
+            mutating = state.mutating,
+            existing = p,
+            onDismiss = { editTarget = null },
+            onSubmitFields = { label, description, jumpHost, jumpUser, targetHost, targetUser ->
+                onUpdate(
+                    p.pathId,
+                    InfraSweepMath.buildUpdate(
+                        original = p,
+                        label = label,
+                        description = description,
+                        jumpHost = jumpHost,
+                        jumpUser = jumpUser,
+                        targetHost = targetHost,
+                        targetUser = targetUser,
+                    ),
+                )
+                editTarget = null
+            },
         )
     }
 
@@ -231,6 +275,7 @@ private fun BastionPathRow(
     path: BastionPathDto,
     inFlight: Boolean,
     actionsEnabled: Boolean,
+    onEdit: () -> Unit,
     onResolve: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -260,6 +305,11 @@ private fun BastionPathRow(
                         modifier = Modifier.testTag(SshBastionTestTags.resolve(path.pathId)),
                     ) { Text("Resolve") }
                     OutlinedButton(
+                        onClick = onEdit,
+                        enabled = actionsEnabled,
+                        modifier = Modifier.testTag(SshBastionTestTags.edit(path.pathId)),
+                    ) { Text("Edit") }
+                    OutlinedButton(
                         onClick = onDelete,
                         enabled = actionsEnabled,
                         modifier = Modifier.testTag(SshBastionTestTags.delete(path.pathId)),
@@ -273,19 +323,23 @@ private fun BastionPathRow(
 @Composable
 private fun BastionFormDialog(
     mutating: Boolean,
+    existing: BastionPathDto?,
     onDismiss: () -> Unit,
-    onSubmit: (CreateBastionPathReq) -> Unit,
+    onSubmitFields: (label: String, description: String, jumpHost: String, jumpUser: String, targetHost: String, targetUser: String) -> Unit,
 ) {
-    var label by remember { mutableStateOf("") }
-    var description by remember { mutableStateOf("") }
-    var jumpHost by remember { mutableStateOf("") }
-    var jumpUser by remember { mutableStateOf("") }
-    var targetHost by remember { mutableStateOf("") }
-    var targetUser by remember { mutableStateOf("") }
+    val editing = existing != null
+    val jumpHop = existing?.let { InfraSweepMath.primaryJumpHop(it) }
+    val targetHopInit = existing?.let { InfraSweepMath.targetHop(it) }
+    var label by remember { mutableStateOf(existing?.label ?: "") }
+    var description by remember { mutableStateOf(existing?.description ?: "") }
+    var jumpHost by remember { mutableStateOf(jumpHop?.hostname ?: "") }
+    var jumpUser by remember { mutableStateOf(jumpHop?.username ?: "") }
+    var targetHost by remember { mutableStateOf(targetHopInit?.hostname ?: "") }
+    var targetUser by remember { mutableStateOf(targetHopInit?.username ?: "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New bastion path") },
+        title = { Text(if (editing) "Edit bastion path" else "New bastion path") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
@@ -335,24 +389,14 @@ private fun BastionFormDialog(
             }
         },
         confirmButton = {
-            val valid = label.isNotBlank() && targetHost.isNotBlank() && targetUser.isNotBlank()
+            val valid = InfraSweepMath.isEditValid(targetHost, targetUser, label)
             TextButton(
                 onClick = {
-                    val jumps = if (jumpHost.isNotBlank()) {
-                        listOf(BastionHopReq(hostname = jumpHost.trim(), username = jumpUser.trim(), label = "bastion"))
-                    } else emptyList()
-                    onSubmit(
-                        CreateBastionPathReq(
-                            label = label.trim(),
-                            description = description.trim(),
-                            jumpHops = jumps,
-                            target = BastionHopReq(hostname = targetHost.trim(), username = targetUser.trim(), label = "target"),
-                        ),
-                    )
+                    onSubmitFields(label, description, jumpHost, jumpUser, targetHost, targetUser)
                 },
                 enabled = !mutating && valid,
                 modifier = Modifier.testTag(SshBastionTestTags.FORM_CONFIRM),
-            ) { Text(if (mutating) "Saving..." else "Create") }
+            ) { Text(if (mutating) "Saving..." else if (editing) "Save" else "Create") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

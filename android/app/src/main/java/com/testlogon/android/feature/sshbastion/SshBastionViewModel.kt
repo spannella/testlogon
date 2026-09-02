@@ -6,6 +6,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.sshbastion.BastionPathDto
 import com.testlogon.android.data.sshbastion.BastionResolvedDto
 import com.testlogon.android.data.sshbastion.CreateBastionPathReq
+import com.testlogon.android.data.sshbastion.UpdateBastionPathReq
 import com.testlogon.android.data.sshbastion.SshBastionRepository
 import com.testlogon.android.feature.adminmod.AdminOpsErrorType
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -84,6 +85,20 @@ class SshBastionViewModel @Inject constructor(
             when (val r = repo.create(req)) {
                 is ApiResult.Success -> {
                     _state.value = _state.value.copy(mutating = false, message = "Created ${r.data.label}")
+                    fetch(isRefresh = true)
+                }
+                is ApiResult.Failure -> reduceMutateError(if (r.error.status == 401) AdminOpsErrorType.AUTH else AdminOpsErrorType.SERVER)
+                is ApiResult.NetworkError -> reduceMutateError(AdminOpsErrorType.NETWORK)
+            }
+        }
+    }
+    fun update(pathId: String, req: UpdateBastionPathReq) {
+        if (_state.value.mutating) return
+        _state.value = _state.value.copy(mutating = true, transientError = null, message = null)
+        viewModelScope.launch {
+            when (val r = repo.update(pathId, req)) {
+                is ApiResult.Success -> {
+                    _state.value = _state.value.copy(mutating = false, message = "Updated ${r.data.label}")
                     fetch(isRefresh = true)
                 }
                 is ApiResult.Failure -> reduceMutateError(if (r.error.status == 401) AdminOpsErrorType.AUTH else AdminOpsErrorType.SERVER)

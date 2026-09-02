@@ -45,6 +45,9 @@ interface K8sApi {
     @GET("ui/remote/k8s/pods")
     suspend fun pods(@Query("status") status: String? = null): K8sPodListDto
 
+    @GET("ui/remote/k8s/pods/{id}")
+    suspend fun getPod(@Path("id") podId: String): K8sPodDto
+
     @GET("ui/remote/k8s/pods/{id}/logs")
     suspend fun logs(@Path("id") podId: String, @Query("tail") tail: Int? = null): K8sPodLogsDto
 
@@ -121,6 +124,7 @@ data class K8sLaunchReq(
 interface K8sRepository {
     suspend fun reference(): ApiResult<K8sReference>
     suspend fun list(status: String?): ApiResult<K8sPodListDto>
+    suspend fun get(podId: String): ApiResult<K8sPodDto>
     suspend fun launch(req: K8sLaunchReq): ApiResult<K8sPodDto>
     suspend fun logs(podId: String): ApiResult<K8sPodLogsDto>
     suspend fun terminate(podId: String): ApiResult<K8sPodDto>
@@ -145,6 +149,9 @@ class DefaultK8sRepository @Inject constructor(
 
     override suspend fun list(status: String?): ApiResult<K8sPodListDto> =
         withContext(io) { call { api.pods(status?.takeIf { it.isNotBlank() }) } }
+
+    override suspend fun get(podId: String): ApiResult<K8sPodDto> =
+        withContext(io) { call { api.getPod(podId) } }
 
     override suspend fun launch(req: K8sLaunchReq): ApiResult<K8sPodDto> =
         withContext(io) { call { api.launch(req) } }

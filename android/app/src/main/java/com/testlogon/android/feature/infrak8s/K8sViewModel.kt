@@ -7,6 +7,7 @@ import com.testlogon.android.data.infrak8s.K8sLaunchReq
 import com.testlogon.android.data.infrak8s.K8sPodDto
 import com.testlogon.android.data.infrak8s.K8sReference
 import com.testlogon.android.data.infrak8s.K8sRepository
+import com.testlogon.android.data.infrasweep.InfraSweepMath
 import com.testlogon.android.feature.adminmod.AdminOpsErrorType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,12 +35,20 @@ sealed interface K8sLogsState {
     data class Error(val type: AdminOpsErrorType) : K8sLogsState
 }
 
+/** Pod-detail modal state (GET /pods/{id}); degrades to the list row on 404. */
+sealed interface K8sDetailState {
+    data object Loading : K8sDetailState
+    data class Loaded(val pod: K8sPodDto) : K8sDetailState
+    data class Error(val type: AdminOpsErrorType) : K8sDetailState
+}
+
 data class K8sUiState(
     val data: K8sDataState = K8sDataState.Loading,
     val reference: K8sReference? = null,
     val actionInFlightId: String? = null,
     val launchInFlight: Boolean = false,
     val logs: K8sLogsState? = null,
+    val detail: K8sDetailState? = null,
     val message: String? = null,
     val transientError: AdminOpsErrorType? = null,
 )
@@ -154,6 +163,37 @@ class K8sViewModel @Inject constructor(
 
     fun closeLogs() {
         _state.value = _state.value.copy(logs = null)
+    }
+    /**
+     * Open the pod detail (GET /pods/{id}). Reads the single pod fresh instead of filtering the
+     * cached list; on 404/any failure we degrade to the [fallback] list row so the sheet still opens.
+     */
+    fun openDetail(fallback: K8sPodDto) {
+        _state.value = _state.value.copy(detail = K8sDetailState.Loading)
+        viewModelScope.launch {
+            when (val r = repo.get(fallback.podId)) {
+                is ApiResult.Success ->
+                    _state.value = _state.value.copy(
+                        detail = K8sDetailState.Loaded(InfraSweepMath.mergePodDetail(fallback, r.data)),
+                    )
+                is ApiResult.Failure ->
+                    if (r.error.status == 404) {
+                        _state.value = _state.value.copy(
+                            detail = K8sDetailState.Loaded(InfraSweepMath.mergePodDetail(fallback, null)),
+                        )
+                    } else {
+                        _state.value = _state.value.copy(
+                            detail = K8sDetailState.Error(if (r.error.status == 401) AdminOpsErrorType.AUTH else AdminOpsErrorType.SERVER),
+                        )
+                    }
+                is ApiResult.NetworkError ->
+                    _state.value = _state.value.copy(detail = K8sDetailState.Error(AdminOpsErrorType.NETWORK))
+            }
+        }
+    }
+
+    fun closeDetail() {
+        _state.value = _state.value.copy(detail = null)
     }
 
     fun clearMessage() {
