@@ -289,3 +289,104 @@ data class ProspectUpdateInDto(
     @Json(name = "phone") val phone: String? = null,
     @Json(name = "company") val company: String? = null,
 )
+
+
+// ─────────  OPPORTUNITIES: forecast / quota / reports / contact-roles (CRM-AND-OPP)  ─────────
+// Mirrors frontend/src/api/endpoints/opportunities.ts + the Pydantic models in app/models.py.
+
+@JsonClass(generateAdapter = true)
+data class OppContactRoleOutDto(
+    @Json(name = "opp_id") val oppId: String = "",
+    @Json(name = "contact_ref") val contactRef: String = "",
+    @Json(name = "contact_role") val contactRole: String = "",
+    @Json(name = "owner_sub") val ownerSub: String = "",
+    @Json(name = "created_at") val createdAt: Long = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class OppContactRoleInDto(
+    @Json(name = "contact_ref") val contactRef: String,
+    @Json(name = "contact_role") val contactRole: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class PipelineStageMetricDto(
+    @Json(name = "stage") val stage: String = "",
+    @Json(name = "label") val label: String = "",
+    @Json(name = "count") val count: Int = 0,
+    @Json(name = "total_amount_cents") val totalAmountCents: Long = 0,
+    @Json(name = "weighted_amount_cents") val weightedAmountCents: Long = 0,
+    @Json(name = "avg_close_date") val avgCloseDate: Long? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class PipelineReportOutDto(
+    @Json(name = "stages") val stages: List<PipelineStageMetricDto> = emptyList(),
+    @Json(name = "total_amount_cents") val totalAmountCents: Long = 0,
+    @Json(name = "total_weighted_cents") val totalWeightedCents: Long = 0,
+    @Json(name = "generated_at") val generatedAt: Long = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class ForecastWorksheetInDto(
+    @Json(name = "committed_cents") val committedCents: Long,
+    @Json(name = "best_case_cents") val bestCaseCents: Long,
+    @Json(name = "pipeline_cents") val pipelineCents: Long,
+    @Json(name = "notes") val notes: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class ForecastWorksheetOutDto(
+    @Json(name = "user_sub") val userSub: String = "",
+    @Json(name = "period_key") val periodKey: String = "",
+    @Json(name = "committed_cents") val committedCents: Long = 0,
+    @Json(name = "best_case_cents") val bestCaseCents: Long = 0,
+    @Json(name = "pipeline_cents") val pipelineCents: Long = 0,
+    @Json(name = "closed_cents") val closedCents: Long = 0,
+    @Json(name = "quota_cents") val quotaCents: Long = 0,
+    @Json(name = "attainment_pct") val attainmentPct: Int = 0,
+    @Json(name = "notes") val notes: String? = null,
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "updated_at") val updatedAt: Long = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class SalesQuotaInDto(
+    @Json(name = "user_sub") val userSub: String,
+    @Json(name = "period_type") val periodType: String,
+    @Json(name = "period_key") val periodKey: String,
+    @Json(name = "target_amount_cents") val targetAmountCents: Long,
+)
+
+@JsonClass(generateAdapter = true)
+data class SalesQuotaOutDto(
+    @Json(name = "user_sub") val userSub: String = "",
+    @Json(name = "period_type") val periodType: String = "",
+    @Json(name = "period_key") val periodKey: String = "",
+    @Json(name = "target_amount_cents") val targetAmountCents: Long = 0,
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "updated_at") val updatedAt: Long = 0,
+    @Json(name = "set_by_sub") val setBySub: String = "",
+)
+
+@JsonClass(generateAdapter = true)
+data class SalesQuotaListOutDto(
+    @Json(name = "items") val items: List<SalesQuotaOutDto> = emptyList(),
+    @Json(name = "next_cursor") val nextCursor: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class StageConfigItemInDto(
+    @Json(name = "stage_key") val stageKey: String,
+    @Json(name = "label") val label: String,
+    @Json(name = "probability_default") val probabilityDefault: Int = 0,
+    @Json(name = "order") val order: Int = 0,
+    @Json(name = "is_won") val isWon: Boolean = false,
+    @Json(name = "is_lost") val isLost: Boolean = false,
+    @Json(name = "color") val color: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class StageConfigInDto(
+    @Json(name = "stages") val stages: List<StageConfigItemInDto>,
+)
