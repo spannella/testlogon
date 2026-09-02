@@ -40,6 +40,7 @@ import com.testlogon.android.core.ui.input.TlButton
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.core.ui.state.StaleBanner
+import com.testlogon.android.data.alerts.AlertsPrefsMath
 
 /** Stable testTags for the alert preferences screen (AND-088). */
 object AlertPrefsTestTags {
@@ -51,6 +52,8 @@ object AlertPrefsTestTags {
     const val CODE_INPUT = "alert_code_input"
     const val VERIFY = "alert_verify"
     const val OPEN_TYPE_PREFS = "alert_open_type_prefs"
+    const val WEBHOOK_INPUT = "alert_webhook_input"
+    const val WEBHOOK_ADD = "alert_webhook_add"
 }
 
 /** AND-088 — route-level Alert Preferences entry (from the Settings hub / More). */
@@ -88,6 +91,9 @@ fun AlertPrefsRoute(
         onCancelPending = viewModel::cancelPending,
         onRemoveEmail = viewModel::removeEmail,
         onRemoveSms = viewModel::removeSms,
+        onWebhookInputChanged = viewModel::onWebhookInputChanged,
+        onAddWebhook = viewModel::addWebhook,
+        onRemoveWebhook = viewModel::removeWebhook,
         modifier = modifier,
     )
 }
@@ -109,6 +115,9 @@ fun AlertPrefsScreen(
     onCancelPending: () -> Unit,
     onRemoveEmail: (String) -> Unit,
     onRemoveSms: (String) -> Unit,
+    onWebhookInputChanged: (String) -> Unit,
+    onAddWebhook: () -> Unit,
+    onRemoveWebhook: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -180,6 +189,20 @@ fun AlertPrefsScreen(
                     onInputChanged = onSmsInputChanged,
                     onAdd = onAddSms,
                     onRemove = onRemoveSms,
+                )
+
+                ChannelSection(
+                    title = "Webhook alert endpoints",
+                    targets = state.webhookUrls,
+                    input = state.webhookInput,
+                    inputLabel = "Webhook URL (https://...)",
+                    keyboardType = KeyboardType.Uri,
+                    inputTag = AlertPrefsTestTags.WEBHOOK_INPUT,
+                    addTag = AlertPrefsTestTags.WEBHOOK_ADD,
+                    addEnabled = AlertsPrefsMath.isValidWebhookUrl(state.webhookInput) && !state.busy,
+                    onInputChanged = onWebhookInputChanged,
+                    onAdd = onAddWebhook,
+                    onRemove = onRemoveWebhook,
                 )
 
                 Card(Modifier.fillMaxWidth()) {
