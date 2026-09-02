@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -62,6 +63,9 @@ object TicketThreadTestTags {
     const val REPLY_ERROR = "ticket_reply_error"
     const val REPLY_DISABLED_CAPTION = "ticket_reply_disabled_caption"
 
+    // JIRA-AND-1 - the TopAppBar action that opens the Jira sync surface.
+    const val JIRA_SYNC_ACTION = "ticket_jira_sync_action"
+
     fun message(index: Int) = "ticket_msg_$index"
 
     /** AND-373 - per-optimistic-message send-state indicator tag. */
@@ -76,6 +80,7 @@ object TicketThreadTestTags {
 fun TicketThreadRoute(
     onBack: () -> Unit,
     onNavigateToLogin: () -> Unit,
+    onOpenJiraSync: () -> Unit = {},
     viewModel: TicketThreadViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -96,6 +101,7 @@ fun TicketThreadRoute(
         onDraftChanged = viewModel::onDraftChanged,
         onSend = viewModel::onSend,
         onRetrySend = viewModel::onRetry,
+        onOpenJiraSync = onOpenJiraSync,
     )
 }
 
@@ -115,6 +121,7 @@ fun TicketThreadScreen(
     onDraftChanged: (String) -> Unit = {},
     onSend: () -> Unit = {},
     onRetrySend: (String) -> Unit = {},
+    onOpenJiraSync: () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag(TicketThreadTestTags.SCREEN),
@@ -126,6 +133,18 @@ fun TicketThreadScreen(
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.tickets_back),
+                        )
+                    }
+                },
+                actions = {
+                    // JIRA-AND-1 - open the Jira sync surface for this ticket.
+                    IconButton(
+                        onClick = onOpenJiraSync,
+                        modifier = Modifier.testTag(TicketThreadTestTags.JIRA_SYNC_ACTION),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Sync,
+                            contentDescription = stringResource(R.string.tickets_jira_sync_action),
                         )
                     }
                 },
