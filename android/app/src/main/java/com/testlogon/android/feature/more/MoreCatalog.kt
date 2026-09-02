@@ -889,6 +889,15 @@ class MoreCatalog @Inject constructor() {
             operatorOnly = true,
         ),
         MoreEntry(
+            id = "agent_run",
+            labelRes = R.string.more_entry_agent_run,
+            icon = Icons.Outlined.SmartToy,
+            route = MoreRoutes.AGENT_RUN,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
             id = "agent_types",
             labelRes = R.string.more_entry_agent_types,
             icon = Icons.Outlined.SmartToy,
