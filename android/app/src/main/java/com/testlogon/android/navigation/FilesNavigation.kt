@@ -41,6 +41,15 @@ fun NavGraphBuilder.filesDestination(navController: NavHostController) {
             onOpenMounts = {
                 navController.navigate(MountsDest.ROUTE) { launchSingleTop = true }
             },
+            // FM-SHARE - storage-usage view (current total + largest files + daily transfer),
+            // reachable from the file manager. Navigates to the usage route (files feature graph).
+            onOpenStorageUsage = {
+                navController.navigate(StorageUsageDest.ROUTE) { launchSingleTop = true }
+            },
+            // FM-SHARE - "shared with me" inbound-shares list, reachable from the file manager.
+            onOpenSharedWithMe = {
+                navController.navigate(SharedWithMeDest.ROUTE) { launchSingleTop = true }
+            },
         )
     }
 }
