@@ -48,12 +48,14 @@ object WorkerDetailTestTags {
     const val START = "worker_detail_start"
     const val STOP = "worker_detail_stop"
     const val TERMINATE = "worker_detail_terminate"
+    const val ORCHESTRATOR = "worker_detail_orchestrator"
 }
 
 @Composable
 fun WorkerDetailRoute(
     onBack: () -> Unit,
     onNavigateToLogin: () -> Unit,
+    onOpenOrchestrator: (String) -> Unit = {},
     viewModel: WorkerDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -73,6 +75,7 @@ fun WorkerDetailRoute(
         onStart = viewModel::start,
         onStop = viewModel::stop,
         onTerminate = viewModel::terminate,
+        onOpenOrchestrator = onOpenOrchestrator,
     )
 }
 
@@ -84,6 +87,7 @@ fun WorkerDetailScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onTerminate: () -> Unit,
+    onOpenOrchestrator: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var confirmTerminate by remember { mutableStateOf(false) }
@@ -111,6 +115,7 @@ fun WorkerDetailScreen(
                     onStart = onStart,
                     onStop = onStop,
                     onTerminate = { confirmTerminate = true },
+                    onOpenOrchestrator = onOpenOrchestrator,
                 )
         }
     }
@@ -134,6 +139,7 @@ private fun WorkerDetailContent(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onTerminate: () -> Unit,
+    onOpenOrchestrator: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val worker = state.worker
@@ -179,6 +185,11 @@ private fun WorkerDetailContent(
                 ) { Text("Terminate") }
             }
         }
+
+        Button(
+            onClick = { onOpenOrchestrator(worker.id) },
+            modifier = Modifier.testTag(WorkerDetailTestTags.ORCHESTRATOR),
+        ) { Text("Manage agent loop") }
 
         HorizontalDivider()
         Text("Provision log", style = MaterialTheme.typography.titleMedium)
