@@ -53,4 +53,9 @@ object AgentsNetworkModule {
     @Singleton
     fun provideDocsApi(retrofit: Retrofit): DocsApi =
         retrofit.create(DocsApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideOrchestratorApi(retrofit: Retrofit): OrchestratorApi =
+        retrofit.create(OrchestratorApi::class.java)
 }

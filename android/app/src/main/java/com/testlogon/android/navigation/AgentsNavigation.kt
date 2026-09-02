@@ -15,6 +15,8 @@ import com.testlogon.android.feature.agents.llmkeys.ui.LlmKeysListRoute
 import com.testlogon.android.feature.agents.memory.ui.MemoryRoute
 import com.testlogon.android.feature.agents.memory.ui.MemoryViewModel
 import com.testlogon.android.feature.agents.memory.ui.MemoryWorkerPickerRoute
+import com.testlogon.android.feature.agents.orchestrator.ui.OrchestratorRoute
+import com.testlogon.android.feature.agents.orchestrator.ui.OrchestratorViewModel
 import com.testlogon.android.feature.agents.prs.ui.PrDetailRoute
 import com.testlogon.android.feature.agents.prs.ui.PrDetailViewModel
 import com.testlogon.android.feature.agents.prs.ui.PrsListRoute
@@ -51,6 +53,13 @@ data object WorkerCreateDest {
 data object WorkerDetailDest {
     const val ROUTE = "agents/workers/{workerId}"
     fun build(workerId: String): String = "agents/workers/${android.net.Uri.encode(workerId)}"
+}
+
+/** AGENT-ORCHESTRATOR (web-parity): the agent-loop console for one worker (reached from worker detail). */
+data object OrchestratorDest {
+    const val ROUTE = "agents/workers/{workerId}/orchestrator"
+    fun build(workerId: String): String =
+        "agents/workers/${android.net.Uri.encode(workerId)}/orchestrator"
 }
 
 data object LlmKeysListDest {
@@ -123,6 +132,20 @@ fun NavGraphBuilder.agentsBasicsDestinations(navController: NavHostController) {
         arguments = listOf(navArgument(WorkerDetailViewModel.ARG_WORKER_ID) { type = NavType.StringType }),
     ) {
         WorkerDetailRoute(
+            onBack = { navController.popBackStack() },
+            onOpenOrchestrator = { id ->
+                navController.navigate(OrchestratorDest.build(id)) { launchSingleTop = true }
+            },
+            onNavigateToLogin = { navController.navigateToAgentsReauth() },
+        )
+    }
+
+    // ---- Orchestrator (agent-loop console for one worker) ----
+    composable(
+        route = OrchestratorDest.ROUTE,
+        arguments = listOf(navArgument(OrchestratorViewModel.ARG_WORKER_ID) { type = NavType.StringType }),
+    ) {
+        OrchestratorRoute(
             onBack = { navController.popBackStack() },
             onNavigateToLogin = { navController.navigateToAgentsReauth() },
         )
