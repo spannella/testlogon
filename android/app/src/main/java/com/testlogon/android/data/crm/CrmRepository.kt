@@ -227,12 +227,62 @@ class LeadsRepositoryImpl @Inject constructor(
 
 // ───────────────────────────  SALES  ────────────────────────────────
 
+/** A forecast worksheet + module/forbidden flags (degrade-on-404/403). */
+data class ForecastResult(
+    val worksheet: ForecastWorksheet?,
+    val moduleDisabled: Boolean = false,
+)
+
+/** A pipeline report + module/forbidden flags (degrade-on-404/503/403). */
+data class PipelineReportResult(
+    val report: PipelineReport?,
+    val moduleDisabled: Boolean = false,
+    val forbidden: Boolean = false,
+)
+
+/** A user's quota list + module/forbidden flags (admin; degrade-on-404/503/403). */
+data class QuotaListResult(
+    val quotas: List<SalesQuota>,
+    val cursor: String?,
+    val moduleDisabled: Boolean = false,
+    val forbidden: Boolean = false,
+)
+
 interface SalesRepository {
     /** One combined pull for the pipeline board: feature status + stages + opportunities. */
     suspend fun pipeline(): ApiResult<PipelineSnapshot>
-    suspend fun getOpportunity(oppId: String): ApiResult<Opportunity>
+    suspend fun getOpportunity(oppId: String, includeContacts: Boolean = false): ApiResult<Opportunity>
     suspend fun create(body: OpportunityCreateInDto): ApiResult<Opportunity>
     suspend fun moveStage(oppId: String, stage: String): ApiResult<Opportunity>
+    suspend fun delete(oppId: String): ApiResult<Unit>
+
+    // OPP-004: contact roles
+    suspend fun listContactRoles(oppId: String): ApiResult<List<OppContactRole>>
+    suspend fun addContactRole(oppId: String, contactRef: String, contactRole: String): ApiResult<OppContactRole>
+    suspend fun removeContactRole(oppId: String, contactRef: String): ApiResult<Unit>
+
+    // OPP-005: forecast worksheet (degrade-on-404)
+    suspend fun getForecast(periodKey: String): ApiResult<ForecastResult>
+    suspend fun upsertForecast(
+        periodKey: String,
+        committedCents: Long,
+        bestCaseCents: Long,
+        pipelineCents: Long,
+        notes: String?,
+    ): ApiResult<ForecastWorksheet>
+
+    // OPP-006: pipeline report (per-rep + admin cross-user)
+    suspend fun pipelineReport(fromTs: Long? = null, toTs: Long? = null): ApiResult<PipelineReportResult>
+    suspend fun adminPipelineReport(fromTs: Long? = null, toTs: Long? = null): ApiResult<PipelineReportResult>
+
+    // OPP-005: admin quota (server 403 for non-admins)
+    suspend fun listUserQuotas(userSub: String): ApiResult<QuotaListResult>
+    suspend fun setQuota(
+        userSub: String,
+        periodType: String,
+        periodKey: String,
+        targetAmountCents: Long,
+    ): ApiResult<SalesQuota>
 }
 
 @Singleton
@@ -268,9 +318,10 @@ class SalesRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun getOpportunity(oppId: String): ApiResult<Opportunity> = withContext(io) {
-        call { api.getOpportunity(oppId).toDomain() }
-    }
+    override suspend fun getOpportunity(oppId: String, includeContacts: Boolean): ApiResult<Opportunity> =
+        withContext(io) {
+            call { api.getOpportunity(oppId, includeContacts.takeIf { it }).toDomain() }
+        }
 
     override suspend fun create(body: OpportunityCreateInDto): ApiResult<Opportunity> = withContext(io) {
         call { api.createOpportunity(body).toDomain() }
@@ -283,6 +334,132 @@ class SalesRepositoryImpl @Inject constructor(
                 OpportunityUpdateInDto(
                     stage = stage,
                     probability = CrmSalesMath.defaultProbabilityFor(stage),
+                ),
+            ).toDomain()
+        }
+    }
+
+    override suspend fun delete(oppId: String): ApiResult<Unit> = withContext(io) {
+        call { api.deleteOpportunity(oppId) }
+    }
+
+    // ── Contact roles (OPP-004) ──────────────────────────────────────────────
+
+    override suspend fun listContactRoles(oppId: String): ApiResult<List<OppContactRole>> = withContext(io) {
+        when (val r = call { api.listContactRoles(oppId) }) {
+            is ApiResult.Success -> ApiResult.Success(r.data.map { it.toDomain() })
+            is ApiResult.Failure ->
+                if (r.error.status == 404 || r.error.status == 503) ApiResult.Success(emptyList()) else r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun addContactRole(
+        oppId: String,
+        contactRef: String,
+        contactRole: String,
+    ): ApiResult<OppContactRole> = withContext(io) {
+        call { api.addContactRole(oppId, OppContactRoleInDto(contactRef, contactRole)).toDomain() }
+    }
+
+    override suspend fun removeContactRole(oppId: String, contactRef: String): ApiResult<Unit> = withContext(io) {
+        call { api.removeContactRole(oppId, contactRef) }
+    }
+
+    // ── Forecast worksheet (OPP-005) ─────────────────────────────────────────
+
+    override suspend fun getForecast(periodKey: String): ApiResult<ForecastResult> = withContext(io) {
+        when (val r = call { api.getForecast(periodKey) }) {
+            is ApiResult.Success -> ApiResult.Success(ForecastResult(r.data.toDomain()))
+            is ApiResult.Failure ->
+                when (r.error.status) {
+                    // 404 = no worksheet yet OR module off; 503 = module off. Degrade to an empty, editable worksheet.
+                    404, 503 -> ApiResult.Success(ForecastResult(null, moduleDisabled = r.error.status == 503))
+                    else -> r
+                }
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun upsertForecast(
+        periodKey: String,
+        committedCents: Long,
+        bestCaseCents: Long,
+        pipelineCents: Long,
+        notes: String?,
+    ): ApiResult<ForecastWorksheet> = withContext(io) {
+        call {
+            api.upsertForecast(
+                periodKey,
+                ForecastWorksheetInDto(
+                    committedCents = maxOf(0L, committedCents),
+                    bestCaseCents = maxOf(0L, bestCaseCents),
+                    pipelineCents = maxOf(0L, pipelineCents),
+                    notes = notes?.ifBlank { null },
+                ),
+            ).toDomain()
+        }
+    }
+
+    // ── Pipeline report (OPP-006) ────────────────────────────────────────────
+
+    override suspend fun pipelineReport(fromTs: Long?, toTs: Long?): ApiResult<PipelineReportResult> =
+        withContext(io) {
+            when (val r = call { api.getPipelineReport(fromTs, toTs) }) {
+                is ApiResult.Success -> ApiResult.Success(PipelineReportResult(r.data.toDomain()))
+                is ApiResult.Failure ->
+                    when (r.error.status) {
+                        404, 503 -> ApiResult.Success(PipelineReportResult(null, moduleDisabled = true))
+                        403 -> ApiResult.Success(PipelineReportResult(null, forbidden = true))
+                        else -> r
+                    }
+                is ApiResult.NetworkError -> r
+            }
+        }
+
+    override suspend fun adminPipelineReport(fromTs: Long?, toTs: Long?): ApiResult<PipelineReportResult> =
+        withContext(io) {
+            when (val r = call { api.getAdminPipelineReport(fromTs, toTs) }) {
+                is ApiResult.Success -> ApiResult.Success(PipelineReportResult(r.data.toDomain()))
+                is ApiResult.Failure ->
+                    when (r.error.status) {
+                        404, 503 -> ApiResult.Success(PipelineReportResult(null, moduleDisabled = true))
+                        403 -> ApiResult.Success(PipelineReportResult(null, forbidden = true))
+                        else -> r
+                    }
+                is ApiResult.NetworkError -> r
+            }
+        }
+
+    // ── Admin quota (OPP-005) ────────────────────────────────────────────────
+
+    override suspend fun listUserQuotas(userSub: String): ApiResult<QuotaListResult> = withContext(io) {
+        when (val r = call { api.listUserQuotas(userSub) }) {
+            is ApiResult.Success ->
+                ApiResult.Success(QuotaListResult(r.data.items.map { it.toDomain() }, r.data.nextCursor))
+            is ApiResult.Failure ->
+                when (r.error.status) {
+                    404, 503 -> ApiResult.Success(QuotaListResult(emptyList(), null, moduleDisabled = true))
+                    403 -> ApiResult.Success(QuotaListResult(emptyList(), null, forbidden = true))
+                    else -> r
+                }
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun setQuota(
+        userSub: String,
+        periodType: String,
+        periodKey: String,
+        targetAmountCents: Long,
+    ): ApiResult<SalesQuota> = withContext(io) {
+        call {
+            api.setQuota(
+                SalesQuotaInDto(
+                    userSub = userSub,
+                    periodType = periodType,
+                    periodKey = periodKey,
+                    targetAmountCents = maxOf(0L, targetAmountCents),
                 ),
             ).toDomain()
         }
@@ -314,3 +491,4 @@ class SalesRepositoryImpl @Inject constructor(
 
 /** Small helper for callers that need the [ApiError] status without a `when`. */
 internal fun ApiResult<*>.statusOrNull(): Int? = (this as? ApiResult.Failure)?.error?.status
+

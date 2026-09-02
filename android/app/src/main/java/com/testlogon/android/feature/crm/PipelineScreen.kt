@@ -60,6 +60,11 @@ object CrmPipelineTestTags {
 @Composable
 fun PipelineRoute(
     onBack: () -> Unit,
+    onOpenForecast: () -> Unit = {},
+    onOpenReport: () -> Unit = {},
+    onOpenTeamReport: () -> Unit = {},
+    onOpenQuotas: () -> Unit = {},
+    onOpenContactRoles: (oppId: String) -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: PipelineViewModel = hiltViewModel(),
 ) {
@@ -73,6 +78,11 @@ fun PipelineRoute(
         onCreate = viewModel::createOpportunity,
         onClearCreateError = viewModel::clearCreateError,
         onClearActionMessage = viewModel::clearActionMessage,
+        onOpenForecast = onOpenForecast,
+        onOpenReport = onOpenReport,
+        onOpenTeamReport = onOpenTeamReport,
+        onOpenQuotas = onOpenQuotas,
+        onOpenContactRoles = onOpenContactRoles,
         modifier = modifier,
     )
 }
@@ -87,8 +97,14 @@ fun PipelineScreen(
     onCreate: (name: String, stage: String, amountDollars: String, closeDate: Long, onCreated: () -> Unit) -> Unit,
     onClearCreateError: () -> Unit,
     onClearActionMessage: () -> Unit,
+    onOpenForecast: () -> Unit = {},
+    onOpenReport: () -> Unit = {},
+    onOpenTeamReport: () -> Unit = {},
+    onOpenQuotas: () -> Unit = {},
+    onOpenContactRoles: (oppId: String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    var overflowOpen by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreate by remember { mutableStateOf(false) }
 
@@ -108,6 +124,29 @@ fun PipelineScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { overflowOpen = true }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "More")
+                    }
+                    DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Forecast worksheet") },
+                            onClick = { overflowOpen = false; onOpenForecast() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Pipeline report") },
+                            onClick = { overflowOpen = false; onOpenReport() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Team report (admin)") },
+                            onClick = { overflowOpen = false; onOpenTeamReport() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Sales quotas (admin)") },
+                            onClick = { overflowOpen = false; onOpenQuotas() },
+                        )
                     }
                 },
             )
@@ -152,6 +191,7 @@ fun PipelineScreen(
                                     stageKeys = state.columns.map { it.stageKey },
                                     moving = state.movingOppId == opp.oppId,
                                     onMoveStage = { newStage -> onMoveStage(opp.oppId, newStage) },
+                                    onOpenContactRoles = { onOpenContactRoles(opp.oppId) },
                                 )
                             }
                         }
@@ -230,6 +270,7 @@ private fun OpportunityCard(
     stageKeys: List<String>,
     moving: Boolean,
     onMoveStage: (String) -> Unit,
+    onOpenContactRoles: () -> Unit = {},
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -262,6 +303,14 @@ private fun OpportunityCard(
                 Icon(Icons.Filled.MoreVert, contentDescription = "Move stage")
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Contact roles") },
+                    onClick = {
+                        menuOpen = false
+                        onOpenContactRoles()
+                    },
+                )
+                androidx.compose.material3.HorizontalDivider()
                 stageKeys.filter { it != opp.stage }.forEach { stage ->
                     DropdownMenuItem(
                         text = { Text(CrmSalesMath.stageLabel(stage)) },

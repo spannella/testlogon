@@ -214,3 +214,114 @@ internal fun LeadScoreRulesDto.toDomain(): LeadScoreRules = LeadScoreRules(
     maxScore = maxScore,
     updatedAt = updatedAt,
 )
+
+
+// ── CRM-AND-OPP: forecast / quota / pipeline-report / contact-role domain + mappers ──
+
+/** A contact linked to an opportunity in a buying role (OPP-004). */
+data class OppContactRole(
+    val oppId: String,
+    val contactRef: String,
+    val contactRole: String,
+    val ownerSub: String,
+    val createdAt: Long,
+) {
+    /** Human label for the role key (title-cased, de-underscored). */
+    val roleLabel: String
+        get() = contactRole.split('_')
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { part -> part.replaceFirstChar { it.uppercaseChar() } }
+            .ifBlank { "—" }
+}
+
+/** A rep's forecast worksheet for one period (OPP-005). */
+data class ForecastWorksheet(
+    val userSub: String,
+    val periodKey: String,
+    val committedCents: Long,
+    val bestCaseCents: Long,
+    val pipelineCents: Long,
+    val closedCents: Long,
+    val quotaCents: Long,
+    val attainmentPct: Int,
+    val notes: String?,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+/** A per-stage row in the pipeline funnel report (OPP-006). Implements [ForecastMath.StageMetricLike]. */
+data class PipelineStageMetric(
+    override val stage: String,
+    val label: String,
+    override val count: Int,
+    override val totalAmountCents: Long,
+    override val weightedAmountCents: Long,
+    val avgCloseDate: Long?,
+) : ForecastMath.StageMetricLike
+
+/** The full pipeline funnel report (OPP-006). */
+data class PipelineReport(
+    val stages: List<PipelineStageMetric>,
+    val totalAmountCents: Long,
+    val totalWeightedCents: Long,
+    val generatedAt: Long,
+)
+
+/** A sales quota target for a rep + period (OPP-005, admin-set). */
+data class SalesQuota(
+    val userSub: String,
+    val periodType: String,
+    val periodKey: String,
+    val targetAmountCents: Long,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val setBySub: String,
+)
+
+internal fun OppContactRoleOutDto.toDomain(): OppContactRole = OppContactRole(
+    oppId = oppId,
+    contactRef = contactRef,
+    contactRole = contactRole,
+    ownerSub = ownerSub,
+    createdAt = createdAt,
+)
+
+internal fun ForecastWorksheetOutDto.toDomain(): ForecastWorksheet = ForecastWorksheet(
+    userSub = userSub,
+    periodKey = periodKey,
+    committedCents = committedCents,
+    bestCaseCents = bestCaseCents,
+    pipelineCents = pipelineCents,
+    closedCents = closedCents,
+    quotaCents = quotaCents,
+    attainmentPct = attainmentPct,
+    notes = notes,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+)
+
+internal fun PipelineStageMetricDto.toDomain(): PipelineStageMetric = PipelineStageMetric(
+    stage = stage,
+    label = label.ifBlank { CrmSalesMath.stageLabel(stage) },
+    count = count,
+    totalAmountCents = totalAmountCents,
+    weightedAmountCents = weightedAmountCents,
+    avgCloseDate = avgCloseDate,
+)
+
+internal fun PipelineReportOutDto.toDomain(): PipelineReport = PipelineReport(
+    stages = stages.map { it.toDomain() },
+    totalAmountCents = totalAmountCents,
+    totalWeightedCents = totalWeightedCents,
+    generatedAt = generatedAt,
+)
+
+internal fun SalesQuotaOutDto.toDomain(): SalesQuota = SalesQuota(
+    userSub = userSub,
+    periodType = periodType,
+    periodKey = periodKey,
+    targetAmountCents = targetAmountCents,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+    setBySub = setBySub,
+)

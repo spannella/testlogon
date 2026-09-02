@@ -10,6 +10,13 @@ import com.testlogon.android.feature.crm.LeadDetailRoute
 import com.testlogon.android.feature.crm.LeadDetailViewModel
 import com.testlogon.android.feature.crm.LeadsListRoute
 import com.testlogon.android.feature.crm.PipelineRoute
+import com.testlogon.android.feature.crm.ForecastRoute
+import com.testlogon.android.feature.crm.ForecastViewModel
+import com.testlogon.android.feature.crm.PipelineReportRoute
+import com.testlogon.android.feature.crm.PipelineReportViewModel
+import com.testlogon.android.feature.crm.ContactRolesRoute
+import com.testlogon.android.feature.crm.ContactRolesViewModel
+import com.testlogon.android.feature.crm.QuotaRoute
 import com.testlogon.android.feature.crm.ProspectPoolRoute
 import com.testlogon.android.feature.crm.ScoringRulesRoute
 import com.testlogon.android.feature.crm.CrmProjectsRoute
@@ -38,6 +45,35 @@ data object CrmLeadDetailDest {
 /** CRM-AND-1 — the sales-pipeline board route. */
 data object CrmPipelineDest {
     const val ROUTE = "crm/pipeline"
+}
+
+/** CRM-AND-OPP — the rep forecast worksheet route; optional period_key path arg (defaults to current month). */
+data object CrmForecastDest {
+    const val ARG_PERIOD_KEY = ForecastViewModel.ARG_PERIOD_KEY
+    const val ROUTE = "crm/forecast/{$ARG_PERIOD_KEY}"
+
+    fun build(periodKey: String): String = "crm/forecast/" + Uri.encode(periodKey.ifBlank { "current" })
+}
+
+/** CRM-AND-OPP — the pipeline funnel report route; the arg is "true" for the admin cross-user variant. */
+data object CrmPipelineReportDest {
+    const val ARG_ADMIN = PipelineReportViewModel.ARG_ADMIN
+    const val ROUTE = "crm/pipeline-report/{$ARG_ADMIN}"
+
+    fun build(admin: Boolean): String = "crm/pipeline-report/" + (if (admin) "true" else "false")
+}
+
+/** CRM-AND-OPP — the opportunity contact-roles route; the arg is the STRING opp_id (path param). */
+data object CrmContactRolesDest {
+    const val ARG_OPP_ID = ContactRolesViewModel.ARG_OPP_ID
+    const val ROUTE = "crm/opportunities/{$ARG_OPP_ID}/contacts"
+
+    fun build(oppId: String): String = "crm/opportunities/" + Uri.encode(oppId) + "/contacts"
+}
+
+/** CRM-AND-OPP — the admin sales-quota view/set route (server admin-gated via 403). */
+data object CrmQuotaDest {
+    const val ROUTE = "crm/quotas"
 }
 
 /** CRM-AND-LED — the marketing prospect pool route. */
@@ -108,7 +144,43 @@ fun NavGraphBuilder.crmDestinations(navController: NavHostController) {
         LeadDetailRoute(onBack = { navController.popBackStack() })
     }
     composable(CrmPipelineDest.ROUTE) {
-        PipelineRoute(onBack = { navController.popBackStack() })
+        PipelineRoute(
+            onBack = { navController.popBackStack() },
+            onOpenForecast = { navController.navigate(CrmForecastDest.build("")) { launchSingleTop = true } },
+            onOpenReport = { navController.navigate(CrmPipelineReportDest.build(admin = false)) { launchSingleTop = true } },
+            onOpenTeamReport = { navController.navigate(CrmPipelineReportDest.build(admin = true)) { launchSingleTop = true } },
+            onOpenQuotas = { navController.navigate(CrmQuotaDest.ROUTE) { launchSingleTop = true } },
+            onOpenContactRoles = { oppId ->
+                navController.navigate(CrmContactRolesDest.build(oppId)) { launchSingleTop = true }
+            },
+        )
+    }
+    composable(
+        route = CrmForecastDest.ROUTE,
+        arguments = listOf(
+            navArgument(CrmForecastDest.ARG_PERIOD_KEY) { type = NavType.StringType },
+        ),
+    ) {
+        ForecastRoute(onBack = { navController.popBackStack() })
+    }
+    composable(
+        route = CrmPipelineReportDest.ROUTE,
+        arguments = listOf(
+            navArgument(CrmPipelineReportDest.ARG_ADMIN) { type = NavType.StringType },
+        ),
+    ) {
+        PipelineReportRoute(onBack = { navController.popBackStack() })
+    }
+    composable(
+        route = CrmContactRolesDest.ROUTE,
+        arguments = listOf(
+            navArgument(CrmContactRolesDest.ARG_OPP_ID) { type = NavType.StringType },
+        ),
+    ) {
+        ContactRolesRoute(onBack = { navController.popBackStack() })
+    }
+    composable(CrmQuotaDest.ROUTE) {
+        QuotaRoute(onBack = { navController.popBackStack() })
     }
     composable(CrmProspectsDest.ROUTE) {
         ProspectPoolRoute(onBack = { navController.popBackStack() })
