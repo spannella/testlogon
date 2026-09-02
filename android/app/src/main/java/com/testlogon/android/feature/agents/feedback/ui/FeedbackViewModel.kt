@@ -19,6 +19,9 @@ import javax.inject.Inject
  * AGENTS-BASICS (web-parity) - drives the FEEDBACK list (web /agents/feedback). A single GET loads all feedback
  * requests; pull-to-refresh re-reads. Per-item respond / skip set an [actioningId] flag and re-load on success.
  * A terminal 401 -> [FeedbackEffect.NavigateToLogin]. No poll loop (the web page polls; we re-read on refresh).
+ *
+ * [dialogState] is a SEPARATE flow for the create-request + terminal-log dialogs so they work from the empty
+ * state too. [create] mirrors web createFeedbackRequest; [loadTerminal] mirrors web getTerminalLog.
  */
 @HiltViewModel
 class FeedbackViewModel @Inject constructor(
@@ -27,6 +30,9 @@ class FeedbackViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow<FeedbackUiState>(FeedbackUiState.Loading)
     val uiState: StateFlow<FeedbackUiState> = _uiState.asStateFlow()
+
+    private val _dialogState = MutableStateFlow(FeedbackDialogState())
+    val dialogState: StateFlow<FeedbackDialogState> = _dialogState.asStateFlow()
 
     private val _effects = Channel<FeedbackEffect>(Channel.BUFFERED)
     val effects: Flow<FeedbackEffect> = _effects.receiveAsFlow()
@@ -78,18 +84,84 @@ class FeedbackViewModel @Inject constructor(
         _uiState.value = current.copy(actioningId = requestId, actionError = null)
         viewModelScope.launch {
             when (val result = block()) {
-                is ApiResult.Success -> when (val reload = repo.list()) {
-                    is ApiResult.Success ->
-                        _uiState.value = if (reload.data.isEmpty()) FeedbackUiState.Empty
-                        else FeedbackUiState.Content(items = reload.data)
-                    else -> clearActioning(null)
-                }
+                is ApiResult.Success -> reloadAfterAction()
                 is ApiResult.Failure -> {
                     if (result.error.status == HTTP_UNAUTHORIZED) _effects.send(FeedbackEffect.NavigateToLogin)
                     clearActioning(result.error.message)
                 }
                 is ApiResult.NetworkError -> clearActioning(OFFLINE)
             }
+        }
+    }
+
+    // ---- Create feedback request (web createFeedbackRequest) ----
+
+    fun openCreate() { _dialogState.value = _dialogState.value.copy(create = CreateFeedbackState()) }
+
+    fun dismissCreate() { _dialogState.value = _dialogState.value.copy(create = null) }
+
+    fun create(workerId: String, ticketId: String, question: String) {
+        if (workerId.isBlank() || ticketId.isBlank() || question.isBlank()) {
+            _dialogState.value = _dialogState.value.copy(
+                create = CreateFeedbackState(error = "Worker, ticket and question are all required."),
+            )
+            return
+        }
+        val cur = _dialogState.value.create ?: CreateFeedbackState()
+        if (cur.submitting) return
+        _dialogState.value = _dialogState.value.copy(create = cur.copy(submitting = true, error = null))
+        viewModelScope.launch {
+            when (val result = repo.create(workerId.trim(), ticketId.trim(), question.trim())) {
+                is ApiResult.Success -> {
+                    _dialogState.value = _dialogState.value.copy(create = null)
+                    reloadAfterAction()
+                }
+                is ApiResult.Failure -> {
+                    if (result.error.status == HTTP_UNAUTHORIZED) _effects.send(FeedbackEffect.NavigateToLogin)
+                    _dialogState.value = _dialogState.value.copy(
+                        create = CreateFeedbackState(error = result.error.message),
+                    )
+                }
+                is ApiResult.NetworkError ->
+                    _dialogState.value = _dialogState.value.copy(create = CreateFeedbackState(error = OFFLINE))
+            }
+        }
+    }
+
+    // ---- Terminal log (web getTerminalLog) ----
+
+    fun openTerminal(workerId: String) {
+        if (workerId.isBlank()) return
+        _dialogState.value = _dialogState.value.copy(terminal = TerminalLogState(workerId = workerId, loading = true))
+        viewModelScope.launch {
+            when (val result = repo.terminalLog(workerId)) {
+                is ApiResult.Success ->
+                    updateTerminal(workerId) { it.copy(loading = false, output = result.data, error = null) }
+                is ApiResult.Failure -> {
+                    if (result.error.status == HTTP_UNAUTHORIZED) _effects.send(FeedbackEffect.NavigateToLogin)
+                    updateTerminal(workerId) { it.copy(loading = false, error = result.error.message) }
+                }
+                is ApiResult.NetworkError ->
+                    updateTerminal(workerId) { it.copy(loading = false, error = OFFLINE) }
+            }
+        }
+    }
+
+    fun dismissTerminal() { _dialogState.value = _dialogState.value.copy(terminal = null) }
+
+    private inline fun updateTerminal(workerId: String, transform: (TerminalLogState) -> TerminalLogState) {
+        val t = _dialogState.value.terminal
+        if (t != null && t.workerId == workerId) {
+            _dialogState.value = _dialogState.value.copy(terminal = transform(t))
+        }
+    }
+
+    private suspend fun reloadAfterAction() {
+        when (val reload = repo.list()) {
+            is ApiResult.Success ->
+                _uiState.value = if (reload.data.isEmpty()) FeedbackUiState.Empty
+                else FeedbackUiState.Content(items = reload.data)
+            else -> clearActioning(null)
         }
     }
 

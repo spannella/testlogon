@@ -8,17 +8,24 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.MarkChatRead
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,10 +60,15 @@ object FeedbackTestTags {
     const val SCREEN = "agent_feedback_screen"
     const val EMPTY = "agent_feedback_empty"
     const val ERROR_RETRY = "agent_feedback_error_retry"
+    const val CREATE_FAB = "agent_feedback_create_fab"
+    const val CREATE_DIALOG = "agent_feedback_create_dialog"
+    const val CREATE_SUBMIT = "agent_feedback_create_submit"
+    const val TERMINAL_DIALOG = "agent_feedback_terminal_dialog"
     fun row(id: String) = "agent_feedback_row_$id"
     fun respondField(id: String) = "agent_feedback_respond_$id"
     fun respondSend(id: String) = "agent_feedback_send_$id"
     fun skip(id: String) = "agent_feedback_skip_$id"
+    fun terminal(id: String) = "agent_feedback_terminal_$id"
 }
 
 @Composable
@@ -66,6 +78,7 @@ fun FeedbackRoute(
     viewModel: FeedbackViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val dialogs by viewModel.dialogState.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
             when (effect) {
@@ -75,22 +88,34 @@ fun FeedbackRoute(
     }
     FeedbackScreen(
         state = state,
+        dialogs = dialogs,
         onBack = onBack,
         onRefresh = viewModel::refresh,
         onRetry = viewModel::onRetry,
         onRespond = viewModel::respond,
         onSkip = viewModel::skip,
+        onOpenCreate = viewModel::openCreate,
+        onDismissCreate = viewModel::dismissCreate,
+        onSubmitCreate = viewModel::create,
+        onOpenTerminal = viewModel::openTerminal,
+        onDismissTerminal = viewModel::dismissTerminal,
     )
 }
 
 @Composable
 fun FeedbackScreen(
     state: FeedbackUiState,
+    dialogs: FeedbackDialogState,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
     onRespond: (workerId: String, requestId: String, text: String) -> Unit,
     onSkip: (workerId: String, requestId: String) -> Unit,
+    onOpenCreate: () -> Unit,
+    onDismissCreate: () -> Unit,
+    onSubmitCreate: (workerId: String, ticketId: String, question: String) -> Unit,
+    onOpenTerminal: (workerId: String) -> Unit,
+    onDismissTerminal: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -104,6 +129,12 @@ fun FeedbackScreen(
                     }
                 },
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = onOpenCreate,
+                modifier = Modifier.testTag(FeedbackTestTags.CREATE_FAB),
+            ) { Icon(Icons.Outlined.Add, contentDescription = "New request") }
         },
     ) { padding ->
         val isRefreshing = (state as? FeedbackUiState.Content)?.isRefreshing == true
@@ -148,6 +179,7 @@ fun FeedbackScreen(
                                     acting = state.actioningId == req.requestId,
                                     onRespond = { text -> onRespond(req.workerId, req.requestId, text) },
                                     onSkip = { onSkip(req.workerId, req.requestId) },
+                                    onViewTerminal = { onOpenTerminal(req.workerId) },
                                 )
                             }
                         }
@@ -155,6 +187,9 @@ fun FeedbackScreen(
             }
         }
     }
+
+    dialogs.create?.let { CreateFeedbackDialog(it, onDismissCreate, onSubmitCreate) }
+    dialogs.terminal?.let { TerminalLogDialog(it, onDismissTerminal) }
 }
 
 @Composable
@@ -163,6 +198,7 @@ private fun FeedbackCard(
     acting: Boolean,
     onRespond: (String) -> Unit,
     onSkip: () -> Unit,
+    onViewTerminal: () -> Unit,
 ) {
     var draft by rememberSaveable(request.requestId) { mutableStateOf("") }
     var showContext by remember(request.requestId) { mutableStateOf(false) }
@@ -183,6 +219,12 @@ private fun FeedbackCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (request.workerId.isNotBlank()) {
+                    IconButton(
+                        onClick = onViewTerminal,
+                        modifier = Modifier.testTag(FeedbackTestTags.terminal(request.requestId)),
+                    ) { Icon(Icons.Outlined.Terminal, contentDescription = "View terminal log") }
+                }
                 AssistChip(onClick = {}, label = { Text(request.statusWire.ifBlank { "unknown" }) })
             }
             Text(text = request.question, style = MaterialTheme.typography.bodyMedium)
@@ -237,4 +279,96 @@ private fun FeedbackCard(
             }
         }
     }
+}
+
+@Composable
+private fun CreateFeedbackDialog(
+    state: CreateFeedbackState,
+    onDismiss: () -> Unit,
+    onSubmit: (workerId: String, ticketId: String, question: String) -> Unit,
+) {
+    var workerId by rememberSaveable { mutableStateOf("") }
+    var ticketId by rememberSaveable { mutableStateOf("") }
+    var question by rememberSaveable { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = { if (!state.submitting) onDismiss() },
+        modifier = Modifier.testTag(FeedbackTestTags.CREATE_DIALOG),
+        title = { Text("New feedback request") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = workerId,
+                    onValueChange = { workerId = it },
+                    label = { Text("Worker ID") },
+                    singleLine = true,
+                    enabled = !state.submitting,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = ticketId,
+                    onValueChange = { ticketId = it },
+                    label = { Text("Ticket ID") },
+                    singleLine = true,
+                    enabled = !state.submitting,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = question,
+                    onValueChange = { question = it },
+                    label = { Text("Question") },
+                    enabled = !state.submitting,
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (state.error != null) {
+                    Text(
+                        text = state.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            OutlinedButton(
+                onClick = { onSubmit(workerId, ticketId, question) },
+                enabled = !state.submitting &&
+                    workerId.isNotBlank() && ticketId.isNotBlank() && question.isNotBlank(),
+                modifier = Modifier.testTag(FeedbackTestTags.CREATE_SUBMIT),
+            ) {
+                if (state.submitting) {
+                    CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                } else {
+                    Text("Create")
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !state.submitting) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun TerminalLogDialog(state: TerminalLogState, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(FeedbackTestTags.TERMINAL_DIALOG),
+        title = { Text("Terminal log") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                when {
+                    state.loading -> CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                    state.error != null ->
+                        Text(state.error, color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall)
+                    state.output == null || state.output.isEmpty ->
+                        Text("No terminal output.", style = MaterialTheme.typography.bodySmall)
+                    else -> Text(state.output.output, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }

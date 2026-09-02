@@ -37,3 +37,12 @@ data class FeedbackRequest(
     /** Only a pending request can be responded to or skipped. */
     val isPending: Boolean get() = status == FeedbackStatus.PENDING
 }
+
+/** Recent terminal output for a worker (web getTerminalLog / TerminalOutputOut). */
+data class TerminalOutput(
+    val workerId: String,
+    val output: String,
+    val charCount: Int,
+) {
+    val isEmpty: Boolean get() = output.isBlank()
+}

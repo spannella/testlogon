@@ -35,3 +35,21 @@ data class AgentPr(
     val createdAt: Long?,
     val mergedAt: Long?,
 )
+
+/** The work-summary produced by an agent work-completion. Mirrors the web WorkSummary. */
+data class WorkSummary(
+    val ticketId: String,
+    val text: String,
+    val filesChanged: List<String>,
+    val decisions: List<String>,
+    val testResults: List<Pair<String, Int>>,
+)
+
+/** The result of completing agent work (web AgentCompletion). [pr] is null when no branch was pushed. */
+data class AgentCompletion(
+    val ticketId: String,
+    val summary: WorkSummary,
+    val pr: AgentPr?,
+    val newStatus: String,
+    val nextAgentType: String,
+)

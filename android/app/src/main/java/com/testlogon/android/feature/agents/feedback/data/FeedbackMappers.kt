@@ -21,3 +21,9 @@ fun FeedbackRequestDto.toDomain(): FeedbackRequest = FeedbackRequest(
     timeoutAction = timeoutAction,
     createdAt = createdAt.takeIf { it > 0 },
 )
+
+fun com.testlogon.android.core.network.agents.TerminalOutputDto.toDomain(): TerminalOutput = TerminalOutput(
+    workerId = workerId,
+    output = output,
+    charCount = charCount,
+)
