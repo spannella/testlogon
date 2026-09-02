@@ -3,8 +3,11 @@ package com.testlogon.android.feature.alerts
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.alerts.AlertsPrefsMath
 import com.testlogon.android.data.alerts.EmailAlertRepository
 import com.testlogon.android.data.alerts.SmsAlertRepository
+import com.testlogon.android.data.alerts.WebhookAlertRepository
+import com.testlogon.android.data.alerts.WebhookPrefs
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
@@ -35,6 +38,9 @@ data class AlertPrefsUiState(
     val smsNumbers: List<String> = emptyList(),
     val emailInput: String = "",
     val smsInput: String = "",
+    val webhookUrls: List<String> = emptyList(),
+    val webhookEventTypes: List<String> = emptyList(),
+    val webhookInput: String = "",
     val codeInput: String = "",
     val pending: PendingChallenge? = null,
     /** Actions currently in flight (drives spinners / disables). */
@@ -58,6 +64,7 @@ sealed interface AlertPrefsEvent {
 class AlertPrefsViewModel @Inject constructor(
     private val emailRepo: EmailAlertRepository,
     private val smsRepo: SmsAlertRepository,
+    private val webhookRepo: WebhookAlertRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AlertPrefsUiState())
@@ -75,8 +82,14 @@ class AlertPrefsViewModel @Inject constructor(
         viewModelScope.launch {
             val emailsDeferred = async { emailRepo.listEmails() }
             val smsDeferred = async { smsRepo.listNumbers() }
+            val webhookDeferred = async { webhookRepo.get() }
             val emailsResult = emailsDeferred.await()
             val smsResult = smsDeferred.await()
+            val webhookResult = webhookDeferred.await()
+            // Webhooks degrade silently (endpoint may 404 on older backends): keep prior on failure.
+            (webhookResult as? ApiResult.Success)?.data?.let { wh ->
+                _state.update { it.copy(webhookUrls = wh.urls, webhookEventTypes = wh.eventTypes) }
+            }
 
             val emails = (emailsResult as? ApiResult.Success)?.data
             val sms = (smsResult as? ApiResult.Success)?.data
@@ -102,6 +115,7 @@ class AlertPrefsViewModel @Inject constructor(
     fun onEmailInputChanged(value: String) = _state.update { it.copy(emailInput = value) }
     fun onSmsInputChanged(value: String) = _state.update { it.copy(smsInput = value) }
     fun onCodeInputChanged(value: String) = _state.update { it.copy(codeInput = value) }
+    fun onWebhookInputChanged(value: String) = _state.update { it.copy(webhookInput = value) }
 
     fun addEmail() {
         val email = _state.value.emailInput.trim()
@@ -193,6 +207,35 @@ class AlertPrefsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val r = smsRepo.remove(phone)) {
                 is ApiResult.Success -> _state.update { it.copy(busy = false, smsNumbers = r.data) }
+                else -> finishWithError(r)
+            }
+        }
+    }
+
+    fun addWebhook() {
+        val url = _state.value.webhookInput.trim()
+        if (!AlertsPrefsMath.isValidWebhookUrl(url) || _state.value.busy) return
+        _state.update { it.copy(busy = true) }
+        val current = WebhookPrefs(_state.value.webhookUrls, _state.value.webhookEventTypes)
+        viewModelScope.launch {
+            when (val r = webhookRepo.addUrl(current, url)) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(busy = false, webhookInput = "", webhookUrls = r.data.urls, webhookEventTypes = r.data.eventTypes)
+                }
+                else -> finishWithError(r)
+            }
+        }
+    }
+
+    fun removeWebhook(url: String) {
+        if (_state.value.busy) return
+        _state.update { it.copy(busy = true) }
+        val current = WebhookPrefs(_state.value.webhookUrls, _state.value.webhookEventTypes)
+        viewModelScope.launch {
+            when (val r = webhookRepo.removeUrl(current, url)) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(busy = false, webhookUrls = r.data.urls, webhookEventTypes = r.data.eventTypes)
+                }
                 else -> finishWithError(r)
             }
         }

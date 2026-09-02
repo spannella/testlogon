@@ -22,6 +22,11 @@ object AlertApiModule {
     @Singleton
     fun provideSmsAlertApi(retrofit: Retrofit): SmsAlertApi =
         retrofit.create(SmsAlertApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideWebhookAlertApi(retrofit: Retrofit): WebhookAlertApi =
+        retrofit.create(WebhookAlertApi::class.java)
 }
 
 /** AND-086 / AND-087 — binds the alert-target repositories to their implementations. */
@@ -36,4 +41,8 @@ abstract class AlertDataModule {
     @Binds
     @Singleton
     abstract fun bindSmsAlertRepository(impl: SmsAlertRepositoryImpl): SmsAlertRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindWebhookAlertRepository(impl: WebhookAlertRepositoryImpl): WebhookAlertRepository
 }
