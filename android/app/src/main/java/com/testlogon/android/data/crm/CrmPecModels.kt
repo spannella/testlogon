@@ -31,6 +31,8 @@ data class CrmProjectTask(
     val endDate: Long?,
     val percentComplete: Int,
     val isMilestone: Boolean,
+    val assignedUserSub: String? = null,
+    val predecessorTaskIds: List<String> = emptyList(),
 )
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -133,6 +135,8 @@ fun CrmProjectTaskDto.toDomain(): CrmProjectTask = CrmProjectTask(
     endDate = endDate,
     percentComplete = percentComplete,
     isMilestone = isMilestone,
+    assignedUserSub = assignedUserSub,
+    predecessorTaskIds = predecessorTaskIds,
 )
 
 fun CrmEventDto.toDomain(): CrmEvent = CrmEvent(
@@ -201,4 +205,161 @@ fun CrmCampaignAttributionDto.toDomain(): CrmCampaignAttribution = CrmCampaignAt
     openRate = openRate,
     clickCount = clickCount,
     clickRate = clickRate,
+)
+
+// ───────────────────────  PROJECTS: PRJ-002+ domain + mappers  ─────────────────
+// PRJ-002/003/004/005/006/007/009/010 domain models. Raw DTOs never leak to the UI.
+
+data class CrmProjectMember(
+    val projectId: String,
+    val userSub: String,
+    val role: String,
+    val addedBy: String,
+    val addedAt: Long,
+)
+
+data class CrmTaskWorkloadEntry(
+    val assigneeKey: String,
+    val resourceType: String,
+    val assignedId: String,
+    val taskCount: Int,
+    val overdueCount: Int,
+)
+
+data class CrmProjectWorkload(
+    val projectId: String,
+    val entries: List<CrmTaskWorkloadEntry>,
+)
+
+data class CrmMilestoneSummaryItem(
+    val id: String,
+    val name: String,
+    val taskOrder: Int,
+    val startDate: Long?,
+    val endDate: Long?,
+    val percentComplete: Int,
+    val onTrack: Boolean,
+    val overdue: Boolean,
+)
+
+data class CrmMilestoneSummary(
+    val items: List<CrmMilestoneSummaryItem>,
+    val totalMilestones: Int,
+    val overdueCount: Int,
+    val onTrackCount: Int,
+    val noDateCount: Int,
+)
+
+data class CrmTemplateTaskDef(
+    val templateTaskId: String,
+    val name: String,
+    val description: String?,
+    val taskOrder: Int,
+    val durationDays: Int,
+    val isMilestone: Boolean,
+)
+
+data class CrmProjectTemplate(
+    val id: String,
+    val name: String,
+    val description: String?,
+    val taskDefs: List<CrmTemplateTaskDef>,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+data class CrmProjectStatusHistoryEntry(
+    val projectId: String,
+    val fromStatus: String?,
+    val toStatus: String,
+    val changedBy: String,
+    val changedAt: Long,
+    val eventId: String,
+)
+
+data class CrmProjectContactLink(
+    val projectId: String,
+    val linkedEntityId: String,
+    val linkedEntityType: String,
+    val addedBy: String,
+    val addedAt: Long,
+    val note: String?,
+)
+
+// ── Mappers ─────────────────────────────────────────────────────────────────
+
+fun CrmProjectMemberDto.toDomain(): CrmProjectMember = CrmProjectMember(
+    projectId = projectId,
+    userSub = userSub,
+    role = role,
+    addedBy = addedBy,
+    addedAt = addedAt,
+)
+
+fun CrmTaskWorkloadEntryDto.toDomain(): CrmTaskWorkloadEntry = CrmTaskWorkloadEntry(
+    assigneeKey = assigneeKey,
+    resourceType = resourceType,
+    assignedId = assignedId,
+    taskCount = taskCount,
+    overdueCount = overdueCount,
+)
+
+fun CrmProjectWorkloadRespDto.toDomain(): CrmProjectWorkload = CrmProjectWorkload(
+    projectId = projectId,
+    entries = entries.map { it.toDomain() },
+)
+
+fun CrmMilestoneSummaryItemDto.toDomain(): CrmMilestoneSummaryItem = CrmMilestoneSummaryItem(
+    id = id,
+    name = name,
+    taskOrder = taskOrder,
+    startDate = startDate,
+    endDate = endDate,
+    percentComplete = percentComplete,
+    onTrack = onTrack,
+    overdue = overdue,
+)
+
+fun CrmMilestoneSummaryRespDto.toDomain(): CrmMilestoneSummary = CrmMilestoneSummary(
+    items = items.map { it.toDomain() },
+    totalMilestones = totalMilestones,
+    overdueCount = overdueCount,
+    onTrackCount = onTrackCount,
+    noDateCount = noDateCount,
+)
+
+fun CrmTemplateTaskDefDto.toDomain(): CrmTemplateTaskDef = CrmTemplateTaskDef(
+    templateTaskId = templateTaskId,
+    name = name,
+    description = description,
+    taskOrder = taskOrder,
+    durationDays = durationDays,
+    isMilestone = isMilestone,
+)
+
+fun CrmProjectTemplateDto.toDomain(): CrmProjectTemplate = CrmProjectTemplate(
+    id = id,
+    name = name,
+    description = description,
+    taskDefs = taskDefs.map { it.toDomain() },
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+)
+
+fun CrmProjectStatusHistoryEntryDto.toDomain(): CrmProjectStatusHistoryEntry = CrmProjectStatusHistoryEntry(
+    projectId = projectId,
+    fromStatus = fromStatus,
+    toStatus = toStatus,
+    changedBy = changedBy,
+    changedAt = changedAt,
+    eventId = eventId,
+)
+
+fun CrmProjectContactLinkDto.toDomain(): CrmProjectContactLink = CrmProjectContactLink(
+    projectId = projectId,
+    linkedEntityId = linkedEntityId,
+    linkedEntityType = linkedEntityType,
+    addedBy = addedBy,
+    addedAt = addedAt,
+    note = note,
 )

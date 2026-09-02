@@ -5,6 +5,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -46,6 +47,146 @@ interface CrmProjectsApi {
         @Query("cursor") cursor: String? = null,
         @Query("limit") limit: Int? = null,
     ): CrmProjectTaskListRespDto
+
+    // ── PRJ-002: project update / delete ──────────────────────────────────────
+
+    @PATCH("v1/crm/projects/{projectId}")
+    suspend fun updateProject(
+        @Path("projectId") projectId: String,
+        @Body body: CrmProjectUpdateInDto,
+    ): CrmProjectDto
+
+    // 200 with an {ok:true}-ish body; a bare Unit tolerates any shape.
+    @DELETE("v1/crm/projects/{projectId}")
+    suspend fun deleteProject(@Path("projectId") projectId: String)
+
+    // ── PRJ-003/004/005: task board + workload + milestones ───────────────────
+
+    @POST("v1/crm/projects/{projectId}/tasks")
+    suspend fun createTask(
+        @Path("projectId") projectId: String,
+        @Body body: CrmProjectTaskCreateInDto,
+    ): CrmProjectTaskDto
+
+    @GET("v1/crm/projects/{projectId}/tasks/{taskId}")
+    suspend fun getTask(
+        @Path("projectId") projectId: String,
+        @Path("taskId") taskId: String,
+    ): CrmProjectTaskDto
+
+    @PATCH("v1/crm/projects/{projectId}/tasks/{taskId}")
+    suspend fun updateTask(
+        @Path("projectId") projectId: String,
+        @Path("taskId") taskId: String,
+        @Body body: CrmProjectTaskUpdateInDto,
+    ): CrmProjectTaskDto
+
+    @DELETE("v1/crm/projects/{projectId}/tasks/{taskId}")
+    suspend fun deleteTask(
+        @Path("projectId") projectId: String,
+        @Path("taskId") taskId: String,
+    )
+
+    @PUT("v1/crm/projects/{projectId}/tasks/order")
+    suspend fun reorderTasks(
+        @Path("projectId") projectId: String,
+        @Body body: CrmProjectTaskReorderInDto,
+    ): CrmProjectTaskOrderRespDto
+
+    @GET("v1/crm/projects/{projectId}/workload")
+    suspend fun getWorkload(@Path("projectId") projectId: String): CrmProjectWorkloadRespDto
+
+    @GET("v1/crm/projects/{projectId}/milestones")
+    suspend fun getMilestoneSummary(
+        @Path("projectId") projectId: String,
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): CrmMilestoneSummaryRespDto
+
+    @GET("v1/crm/projects/{projectId}/status-history")
+    suspend fun getStatusHistory(
+        @Path("projectId") projectId: String,
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): CrmProjectStatusHistoryRespDto
+
+    // ── PRJ-007: members ──────────────────────────────────────────────────────
+
+    @POST("v1/crm/projects/{projectId}/members")
+    suspend fun addMember(
+        @Path("projectId") projectId: String,
+        @Body body: CrmProjectAddMemberInDto,
+    ): CrmProjectMemberDto
+
+    @GET("v1/crm/projects/{projectId}/members")
+    suspend fun listMembers(
+        @Path("projectId") projectId: String,
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): CrmProjectMemberListRespDto
+
+    @PATCH("v1/crm/projects/{projectId}/members/{userSub}")
+    suspend fun updateMemberRole(
+        @Path("projectId") projectId: String,
+        @Path("userSub") userSub: String,
+        @Body body: CrmProjectUpdateMemberInDto,
+    ): CrmProjectMemberDto
+
+    @DELETE("v1/crm/projects/{projectId}/members/{userSub}")
+    suspend fun removeMember(
+        @Path("projectId") projectId: String,
+        @Path("userSub") userSub: String,
+    )
+
+    // ── PRJ-010: contact links ────────────────────────────────────────────────
+
+    @POST("v1/crm/projects/{projectId}/contact-links")
+    suspend fun addContactLink(
+        @Path("projectId") projectId: String,
+        @Body body: CrmProjectAddContactLinkInDto,
+    ): CrmProjectContactLinkDto
+
+    @GET("v1/crm/projects/{projectId}/contact-links")
+    suspend fun listContactLinks(
+        @Path("projectId") projectId: String,
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): CrmProjectContactLinkListRespDto
+
+    @DELETE("v1/crm/projects/{projectId}/contact-links/{entityId}")
+    suspend fun removeContactLink(
+        @Path("projectId") projectId: String,
+        @Path("entityId") entityId: String,
+    )
+
+    // ── PRJ-006: templates (owner-scoped; degrade-on-404) ─────────────────────
+
+    @GET("v1/crm/projects/templates")
+    suspend fun listTemplates(
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): CrmTemplateListRespDto
+
+    @GET("v1/crm/projects/templates/{templateId}")
+    suspend fun getTemplate(@Path("templateId") templateId: String): CrmProjectTemplateDto
+
+    @POST("v1/crm/projects/templates")
+    suspend fun createTemplate(@Body body: CrmTemplateCreateInDto): CrmProjectTemplateDto
+
+    @POST("v1/crm/projects/templates/from-project/{projectId}")
+    suspend fun createTemplateFromProject(
+        @Path("projectId") projectId: String,
+        @Body body: CrmTemplateFromProjectInDto,
+    ): CrmProjectTemplateDto
+
+    @DELETE("v1/crm/projects/templates/{templateId}")
+    suspend fun deleteTemplate(@Path("templateId") templateId: String)
+
+    @POST("v1/crm/projects/templates/{templateId}/instantiate")
+    suspend fun instantiateTemplate(
+        @Path("templateId") templateId: String,
+        @Body body: CrmTemplateInstantiateInDto,
+    ): CrmProjectDto
 }
 
 // ─── Events: prefix /ui/crm/events ───────────────────────────────────────────

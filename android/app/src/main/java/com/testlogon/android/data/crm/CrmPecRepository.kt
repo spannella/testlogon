@@ -23,6 +23,9 @@ data class CrmProjectsPage(
 data class CrmProjectDetail(
     val project: CrmProject,
     val tasks: List<CrmProjectTask>,
+    val members: List<CrmProjectMember> = emptyList(),
+    val milestones: CrmMilestoneSummary? = null,
+    val workload: CrmProjectWorkload? = null,
 )
 
 data class CrmEventsPage(
@@ -54,12 +57,53 @@ data class CrmCampaignDetail(
     val attribution: CrmCampaignAttribution?,
 )
 
+data class CrmTemplatesResult(
+    val templates: List<CrmProjectTemplate>,
+    val cursor: String?,
+    val moduleDisabled: Boolean = false,
+)
+
 // ───────────────────────────  PROJECTS  ──────────────────────────────
 
 interface CrmProjectsRepository {
     suspend fun list(status: String? = null): ApiResult<CrmProjectsPage>
     suspend fun detail(projectId: String): ApiResult<CrmProjectDetail>
     suspend fun create(body: CrmProjectCreateInDto): ApiResult<CrmProject>
+
+    // PRJ-002: project update / delete
+    suspend fun update(projectId: String, body: CrmProjectUpdateInDto): ApiResult<CrmProject>
+    suspend fun delete(projectId: String): ApiResult<Unit>
+
+    // PRJ-003: tasks
+    suspend fun createTask(projectId: String, body: CrmProjectTaskCreateInDto): ApiResult<CrmProjectTask>
+    suspend fun getTask(projectId: String, taskId: String): ApiResult<CrmProjectTask>
+    suspend fun updateTask(projectId: String, taskId: String, body: CrmProjectTaskUpdateInDto): ApiResult<CrmProjectTask>
+    suspend fun deleteTask(projectId: String, taskId: String): ApiResult<Unit>
+    suspend fun reorderTasks(projectId: String, taskIds: List<String>): ApiResult<List<CrmProjectTask>>
+
+    // PRJ-004/005/009: workload / milestones / status history
+    suspend fun workload(projectId: String): ApiResult<CrmProjectWorkload?>
+    suspend fun milestoneSummary(projectId: String): ApiResult<CrmMilestoneSummary?>
+    suspend fun statusHistory(projectId: String): ApiResult<List<CrmProjectStatusHistoryEntry>>
+
+    // PRJ-007: members
+    suspend fun listMembers(projectId: String): ApiResult<List<CrmProjectMember>>
+    suspend fun addMember(projectId: String, userSub: String, role: String?): ApiResult<CrmProjectMember>
+    suspend fun updateMemberRole(projectId: String, userSub: String, role: String): ApiResult<CrmProjectMember>
+    suspend fun removeMember(projectId: String, userSub: String): ApiResult<Unit>
+
+    // PRJ-010: contact links
+    suspend fun listContactLinks(projectId: String): ApiResult<List<CrmProjectContactLink>>
+    suspend fun addContactLink(projectId: String, entityId: String, entityType: String?, note: String?): ApiResult<CrmProjectContactLink>
+    suspend fun removeContactLink(projectId: String, entityId: String): ApiResult<Unit>
+
+    // PRJ-006: templates
+    suspend fun listTemplates(): ApiResult<CrmTemplatesResult>
+    suspend fun getTemplate(templateId: String): ApiResult<CrmProjectTemplate>
+    suspend fun createTemplate(name: String, description: String?): ApiResult<CrmProjectTemplate>
+    suspend fun createTemplateFromProject(projectId: String, name: String, description: String?): ApiResult<CrmProjectTemplate>
+    suspend fun deleteTemplate(templateId: String): ApiResult<Unit>
+    suspend fun instantiateTemplate(templateId: String, projectName: String, startDate: Long?): ApiResult<CrmProject>
 }
 
 @Singleton
@@ -85,10 +129,17 @@ class CrmProjectsRepositoryImpl @Inject constructor(
     override suspend fun detail(projectId: String): ApiResult<CrmProjectDetail> = withContext(io) {
         when (val proj = call { api.getProject(projectId).toDomain() }) {
             is ApiResult.Success -> {
-                // Tasks are best-effort; a failure/degradation renders an empty task list.
+                // Tasks / members / milestones / workload are best-effort; a failure or a
+                // degraded (404) sub-resource renders an empty slice rather than failing the page.
                 val tasks = (call { api.listTasks(projectId) } as? ApiResult.Success)
                     ?.data?.items?.map { it.toDomain() }?.sortedBy { it.taskOrder } ?: emptyList()
-                ApiResult.Success(CrmProjectDetail(proj.data, tasks))
+                val members = (call { api.listMembers(projectId) } as? ApiResult.Success)
+                    ?.data?.items?.map { it.toDomain() } ?: emptyList()
+                val milestones = (call { api.getMilestoneSummary(projectId) } as? ApiResult.Success)
+                    ?.data?.toDomain()
+                val workload = (call { api.getWorkload(projectId) } as? ApiResult.Success)
+                    ?.data?.toDomain()
+                ApiResult.Success(CrmProjectDetail(proj.data, tasks, members, milestones, workload))
             }
             is ApiResult.Failure -> proj
             is ApiResult.NetworkError -> proj
@@ -97,6 +148,176 @@ class CrmProjectsRepositoryImpl @Inject constructor(
 
     override suspend fun create(body: CrmProjectCreateInDto): ApiResult<CrmProject> = withContext(io) {
         call { api.createProject(body).toDomain() }
+    }
+
+    override suspend fun update(projectId: String, body: CrmProjectUpdateInDto): ApiResult<CrmProject> =
+        withContext(io) { call { api.updateProject(projectId, body).toDomain() } }
+
+    override suspend fun delete(projectId: String): ApiResult<Unit> = withContext(io) {
+        call { api.deleteProject(projectId) }
+    }
+
+    override suspend fun createTask(
+        projectId: String,
+        body: CrmProjectTaskCreateInDto,
+    ): ApiResult<CrmProjectTask> = withContext(io) {
+        call { api.createTask(projectId, body).toDomain() }
+    }
+
+    override suspend fun getTask(projectId: String, taskId: String): ApiResult<CrmProjectTask> =
+        withContext(io) { call { api.getTask(projectId, taskId).toDomain() } }
+
+    override suspend fun updateTask(
+        projectId: String,
+        taskId: String,
+        body: CrmProjectTaskUpdateInDto,
+    ): ApiResult<CrmProjectTask> = withContext(io) {
+        call { api.updateTask(projectId, taskId, body).toDomain() }
+    }
+
+    override suspend fun deleteTask(projectId: String, taskId: String): ApiResult<Unit> =
+        withContext(io) { call { api.deleteTask(projectId, taskId) } }
+
+    override suspend fun reorderTasks(
+        projectId: String,
+        taskIds: List<String>,
+    ): ApiResult<List<CrmProjectTask>> = withContext(io) {
+        when (val res = call { api.reorderTasks(projectId, CrmProjectTaskReorderInDto(taskIds)) }) {
+            is ApiResult.Success -> ApiResult.Success(res.data.items.map { it.toDomain() })
+            is ApiResult.Failure -> res
+            is ApiResult.NetworkError -> res
+        }
+    }
+
+    override suspend fun workload(projectId: String): ApiResult<CrmProjectWorkload?> = withContext(io) {
+        when (val res = call { api.getWorkload(projectId).toDomain() }) {
+            is ApiResult.Success -> res
+            is ApiResult.Failure -> if (res.error.status == 404) ApiResult.Success(null) else res
+            is ApiResult.NetworkError -> res
+        }
+    }
+
+    override suspend fun milestoneSummary(projectId: String): ApiResult<CrmMilestoneSummary?> = withContext(io) {
+        when (val res = call { api.getMilestoneSummary(projectId).toDomain() }) {
+            is ApiResult.Success -> res
+            is ApiResult.Failure -> if (res.error.status == 404) ApiResult.Success(null) else res
+            is ApiResult.NetworkError -> res
+        }
+    }
+
+    override suspend fun statusHistory(projectId: String): ApiResult<List<CrmProjectStatusHistoryEntry>> =
+        withContext(io) {
+            when (val res = call { api.getStatusHistory(projectId) }) {
+                is ApiResult.Success -> ApiResult.Success(res.data.items.map { it.toDomain() })
+                is ApiResult.Failure -> if (res.error.status == 404) ApiResult.Success(emptyList()) else res
+                is ApiResult.NetworkError -> res
+            }
+        }
+
+    override suspend fun listMembers(projectId: String): ApiResult<List<CrmProjectMember>> = withContext(io) {
+        when (val res = call { api.listMembers(projectId) }) {
+            is ApiResult.Success -> ApiResult.Success(res.data.items.map { it.toDomain() })
+            is ApiResult.Failure -> if (res.error.status == 404) ApiResult.Success(emptyList()) else res
+            is ApiResult.NetworkError -> res
+        }
+    }
+
+    override suspend fun addMember(
+        projectId: String,
+        userSub: String,
+        role: String?,
+    ): ApiResult<CrmProjectMember> = withContext(io) {
+        call { api.addMember(projectId, CrmProjectAddMemberInDto(userSub = userSub, role = role?.ifBlank { null })).toDomain() }
+    }
+
+    override suspend fun updateMemberRole(
+        projectId: String,
+        userSub: String,
+        role: String,
+    ): ApiResult<CrmProjectMember> = withContext(io) {
+        call { api.updateMemberRole(projectId, userSub, CrmProjectUpdateMemberInDto(role = role)).toDomain() }
+    }
+
+    override suspend fun removeMember(projectId: String, userSub: String): ApiResult<Unit> =
+        withContext(io) { call { api.removeMember(projectId, userSub) } }
+
+    override suspend fun listContactLinks(projectId: String): ApiResult<List<CrmProjectContactLink>> =
+        withContext(io) {
+            when (val res = call { api.listContactLinks(projectId) }) {
+                is ApiResult.Success -> ApiResult.Success(res.data.items.map { it.toDomain() })
+                is ApiResult.Failure -> if (res.error.status == 404) ApiResult.Success(emptyList()) else res
+                is ApiResult.NetworkError -> res
+            }
+        }
+
+    override suspend fun addContactLink(
+        projectId: String,
+        entityId: String,
+        entityType: String?,
+        note: String?,
+    ): ApiResult<CrmProjectContactLink> = withContext(io) {
+        call {
+            api.addContactLink(
+                projectId,
+                CrmProjectAddContactLinkInDto(
+                    linkedEntityId = entityId,
+                    linkedEntityType = entityType?.ifBlank { null },
+                    note = note?.ifBlank { null },
+                ),
+            ).toDomain()
+        }
+    }
+
+    override suspend fun removeContactLink(projectId: String, entityId: String): ApiResult<Unit> =
+        withContext(io) { call { api.removeContactLink(projectId, entityId) } }
+
+    override suspend fun listTemplates(): ApiResult<CrmTemplatesResult> = withContext(io) {
+        when (val res = call { api.listTemplates() }) {
+            is ApiResult.Success -> ApiResult.Success(
+                CrmTemplatesResult(res.data.items.map { it.toDomain() }, res.data.cursor),
+            )
+            is ApiResult.Failure ->
+                if (res.error.status == 404) ApiResult.Success(CrmTemplatesResult(emptyList(), null, moduleDisabled = true))
+                else res
+            is ApiResult.NetworkError -> res
+        }
+    }
+
+    override suspend fun getTemplate(templateId: String): ApiResult<CrmProjectTemplate> =
+        withContext(io) { call { api.getTemplate(templateId).toDomain() } }
+
+    override suspend fun createTemplate(name: String, description: String?): ApiResult<CrmProjectTemplate> =
+        withContext(io) {
+            call { api.createTemplate(CrmTemplateCreateInDto(name = name, description = description?.ifBlank { null })).toDomain() }
+        }
+
+    override suspend fun createTemplateFromProject(
+        projectId: String,
+        name: String,
+        description: String?,
+    ): ApiResult<CrmProjectTemplate> = withContext(io) {
+        call {
+            api.createTemplateFromProject(
+                projectId,
+                CrmTemplateFromProjectInDto(name = name, description = description?.ifBlank { null }),
+            ).toDomain()
+        }
+    }
+
+    override suspend fun deleteTemplate(templateId: String): ApiResult<Unit> =
+        withContext(io) { call { api.deleteTemplate(templateId) } }
+
+    override suspend fun instantiateTemplate(
+        templateId: String,
+        projectName: String,
+        startDate: Long?,
+    ): ApiResult<CrmProject> = withContext(io) {
+        call {
+            api.instantiateTemplate(
+                templateId,
+                CrmTemplateInstantiateInDto(projectName = projectName, startDate = startDate),
+            ).toDomain()
+        }
     }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = runCatchingApi(errorParser, block)
