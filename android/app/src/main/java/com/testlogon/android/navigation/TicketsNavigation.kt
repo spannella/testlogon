@@ -7,6 +7,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.core.model.LogoutReason
+import com.testlogon.android.feature.jira.ui.JiraSyncRoute
 import com.testlogon.android.feature.tickets.ui.SpacesListRoute
 import com.testlogon.android.feature.tickets.ui.TicketListRoute
 import com.testlogon.android.feature.tickets.ui.TicketThreadRoute
@@ -34,6 +35,20 @@ data object TicketThreadDest {
 
     fun build(spaceId: String, ticketId: String): String =
         "tickets/space/${Uri.encode(spaceId)}/ticket/${Uri.encode(ticketId)}"
+}
+
+/**
+ * JIRA-AND-1 - the Jira sync surface for one ticket, reachable from the ticket THREAD. Lives INSIDE the existing
+ * tickets nav graph (no new top-level feature graph). Its ViewModel reads {spaceId} (the workspace scope) +
+ * {ticketId} from SavedStateHandle.
+ */
+data object TicketJiraSyncDest {
+    const val ARG_SPACE_ID = "spaceId"
+    const val ARG_TICKET_ID = "ticketId"
+    const val ROUTE = "tickets/space/{$ARG_SPACE_ID}/ticket/{$ARG_TICKET_ID}/jira"
+
+    fun build(spaceId: String, ticketId: String): String =
+        "tickets/space/${Uri.encode(spaceId)}/ticket/${Uri.encode(ticketId)}/jira"
 }
 
 /**
@@ -76,7 +91,26 @@ fun NavGraphBuilder.ticketsDestinations(navController: NavHostController) {
             navArgument(TicketThreadDest.ARG_TICKET_ID) { type = NavType.StringType },
         ),
     ) {
+        val spaceId = it.arguments?.getString(TicketThreadDest.ARG_SPACE_ID).orEmpty()
+        val ticketId = it.arguments?.getString(TicketThreadDest.ARG_TICKET_ID).orEmpty()
         TicketThreadRoute(
+            onBack = { navController.popBackStack() },
+            onNavigateToLogin = { navController.navigateToTicketsReauth() },
+            onOpenJiraSync = {
+                navController.navigate(TicketJiraSyncDest.build(spaceId, ticketId)) {
+                    launchSingleTop = true
+                }
+            },
+        )
+    }
+    composable(
+        route = TicketJiraSyncDest.ROUTE,
+        arguments = listOf(
+            navArgument(TicketJiraSyncDest.ARG_SPACE_ID) { type = NavType.StringType },
+            navArgument(TicketJiraSyncDest.ARG_TICKET_ID) { type = NavType.StringType },
+        ),
+    ) {
+        JiraSyncRoute(
             onBack = { navController.popBackStack() },
             onNavigateToLogin = { navController.navigateToTicketsReauth() },
         )

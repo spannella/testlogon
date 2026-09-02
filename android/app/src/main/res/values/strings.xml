@@ -4262,6 +4262,7 @@
     <string name="more_entry_tickets">Support tickets</string>
     <string name="more_entry_support">Help &amp; support</string>
     <string name="tickets_back">Back</string>
+    <string name="tickets_jira_sync_action">Jira sync</string>
     <string name="tickets_spaces_title">Ticket spaces</string>
     <string name="tickets_spaces_empty_title">No ticket spaces yet</string>
     <string name="tickets_spaces_empty_body">Support spaces you can access will appear here.</string>
