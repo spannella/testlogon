@@ -96,6 +96,9 @@
     <string name="more_entry_achievements">Achievements</string>
     <string name="more_entry_crm_leads">Leads</string>
     <string name="more_entry_crm_pipeline">Sales pipeline</string>
+    <string name="more_entry_crm_projects">CRM projects</string>
+    <string name="more_entry_crm_events">CRM events</string>
+    <string name="more_entry_crm_campaigns">CRM campaigns</string>
     <string name="more_entry_videos">My videos</string>
     <string name="more_entry_vod_catalog">Browse videos</string>
     <string name="more_entry_clips">Clips</string>

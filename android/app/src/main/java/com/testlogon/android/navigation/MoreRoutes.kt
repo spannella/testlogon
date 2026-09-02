@@ -59,6 +59,12 @@ object MoreRoutes {
     val CRM_LEADS: String get() = CrmLeadsDest.ROUTE
     val CRM_PIPELINE: String get() = CrmPipelineDest.ROUTE
 
+    // CRM-AND-PEC: SuiteCRM projects (/v1/crm/projects), events (/ui/crm/events) and marketing
+    // campaigns (/ui/crm-marketing/campaigns). Each degrades-on-404 when the module is off.
+    val CRM_PROJECTS: String get() = CrmProjectsDest.ROUTE
+    val CRM_EVENTS: String get() = CrmEventsDest.ROUTE
+    val CRM_CAMPAIGNS: String get() = CrmCampaignsDest.ROUTE
+
     // AND-189: the caller's videos library grid.
     val VIDEOS: String get() = VideosLibraryDest.ROUTE
 
@@ -660,6 +666,9 @@ object MoreRoutes {
             ACHIEVEMENTS,
             CRM_LEADS,
             CRM_PIPELINE,
+            CRM_PROJECTS,
+            CRM_EVENTS,
+            CRM_CAMPAIGNS,
             VIDEOS,
             VOD_CATALOG,
             VOD_RENTALS,

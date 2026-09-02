@@ -20,6 +20,19 @@ object CrmApiModule {
     @Provides
     @Singleton
     fun provideSalesApi(retrofit: Retrofit): SalesApi = retrofit.create(SalesApi::class.java)
+
+    // CRM-AND-PEC — projects / events / campaigns APIs on the same shared Retrofit.
+    @Provides
+    @Singleton
+    fun provideCrmProjectsApi(retrofit: Retrofit): CrmProjectsApi = retrofit.create(CrmProjectsApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideCrmEventsApi(retrofit: Retrofit): CrmEventsApi = retrofit.create(CrmEventsApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideCrmCampaignsApi(retrofit: Retrofit): CrmCampaignsApi = retrofit.create(CrmCampaignsApi::class.java)
 }
 
 /** CRM-AND-1 — binds the CRM repositories to their implementations. */
@@ -34,4 +47,17 @@ abstract class CrmDataModule {
     @Binds
     @Singleton
     abstract fun bindSalesRepository(impl: SalesRepositoryImpl): SalesRepository
+
+    // CRM-AND-PEC
+    @Binds
+    @Singleton
+    abstract fun bindCrmProjectsRepository(impl: CrmProjectsRepositoryImpl): CrmProjectsRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindCrmEventsRepository(impl: CrmEventsRepositoryImpl): CrmEventsRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindCrmCampaignsRepository(impl: CrmCampaignsRepositoryImpl): CrmCampaignsRepository
 }

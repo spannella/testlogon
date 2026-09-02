@@ -740,6 +740,31 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.APP,
         ),
+        // CRM-AND-PEC: SuiteCRM projects / events / marketing-campaigns surfaces (degrade-on-404).
+        MoreEntry(
+            id = "crm_projects",
+            labelRes = R.string.more_entry_crm_projects,
+            icon = Icons.Outlined.FolderOpen,
+            route = MoreRoutes.CRM_PROJECTS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "crm_events",
+            labelRes = R.string.more_entry_crm_events,
+            icon = Icons.Outlined.EventNote,
+            route = MoreRoutes.CRM_EVENTS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "crm_campaigns",
+            labelRes = R.string.more_entry_crm_campaigns,
+            icon = Icons.Outlined.Campaign,
+            route = MoreRoutes.CRM_CAMPAIGNS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.APP,
+        ),
         MoreEntry(
             id = "videos",
             labelRes = R.string.more_entry_videos,
