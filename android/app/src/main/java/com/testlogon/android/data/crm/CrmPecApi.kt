@@ -1,7 +1,9 @@
 package com.testlogon.android.data.crm
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -66,6 +68,82 @@ interface CrmEventsApi {
 
     @GET("ui/crm/events/{eventId}/capacity")
     suspend fun getCapacity(@Path("eventId") eventId: String): CrmEventCapacityDto
+
+    // ── EVT-002: event update + invitee management ────────────────────────────
+
+    @PATCH("ui/crm/events/{eventId}")
+    suspend fun updateEvent(
+        @Path("eventId") eventId: String,
+        @Body body: CrmEventUpdateInDto,
+    ): CrmEventDto
+
+    @POST("ui/crm/events/{eventId}/invitees")
+    suspend fun addInvitee(
+        @Path("eventId") eventId: String,
+        @Body body: CrmInviteeAddInDto,
+    ): CrmInviteeDto
+
+    // 204 No Content on success → suspend Unit tolerates the empty body.
+    @DELETE("ui/crm/events/{eventId}/invitees/{inviteeSub}")
+    suspend fun removeInvitee(
+        @Path("eventId") eventId: String,
+        @Path("inviteeSub") inviteeSub: String,
+    )
+
+    @POST("ui/crm/events/{eventId}/invitees/bulk-import")
+    suspend fun bulkImportInvitees(
+        @Path("eventId") eventId: String,
+        @Body body: CrmInviteeBulkImportInDto,
+    ): CrmBulkImportDto
+
+    @POST("ui/crm/events/{eventId}/invitees/send-invitations")
+    suspend fun sendInvitations(
+        @Path("eventId") eventId: String,
+        @Body body: Map<String, String> = emptyMap(),
+    ): CrmSendInvitationsDto
+
+    @GET("ui/crm/events/{eventId}/invitees")
+    suspend fun listInvitees(
+        @Path("eventId") eventId: String,
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): CrmInviteeListRespDto
+
+    // ── EVT-003: registration workflow ────────────────────────────────────────
+
+    @POST("ui/crm/events/{eventId}/registrations")
+    suspend fun registerForEvent(
+        @Path("eventId") eventId: String,
+        @Body body: Map<String, String> = emptyMap(),
+    ): CrmRegistrationDto
+
+    @POST("ui/crm/events/{eventId}/registrations/{registrantSub}/respond")
+    suspend fun respondToInvitation(
+        @Path("eventId") eventId: String,
+        @Path("registrantSub") registrantSub: String,
+        @Body body: CrmRespondInDto,
+    ): CrmRegistrationDto
+
+    @POST("ui/crm/events/{eventId}/registrations/{registrantSub}/check-in")
+    suspend fun checkInAttendee(
+        @Path("eventId") eventId: String,
+        @Path("registrantSub") registrantSub: String,
+        @Body body: Map<String, String> = emptyMap(),
+    ): CrmRegistrationDto
+
+    // 204 No Content on success → suspend Unit tolerates the empty body.
+    @DELETE("ui/crm/events/{eventId}/registrations/{registrantSub}")
+    suspend fun cancelRegistration(
+        @Path("eventId") eventId: String,
+        @Path("registrantSub") registrantSub: String,
+    )
+
+    @GET("ui/crm/events/{eventId}/registrations")
+    suspend fun listRegistrations(
+        @Path("eventId") eventId: String,
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): CrmRegistrationListRespDto
 }
 
 // ─── Campaigns: prefix /ui/crm-marketing ─────────────────────────────────────

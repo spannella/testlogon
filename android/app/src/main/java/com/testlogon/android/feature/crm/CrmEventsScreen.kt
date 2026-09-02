@@ -60,6 +60,7 @@ object CrmEventsTestTags {
 
 @Composable
 fun CrmEventsRoute(
+    onEventClick: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CrmEventsViewModel = hiltViewModel(),
@@ -67,6 +68,7 @@ fun CrmEventsRoute(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     CrmEventsScreen(
         state = state,
+        onEventClick = onEventClick,
         onBack = onBack,
         onRefresh = viewModel::onRefresh,
         onRetry = viewModel::onRetry,
@@ -79,6 +81,7 @@ fun CrmEventsRoute(
 @Composable
 fun CrmEventsScreen(
     state: CrmEventsUiState,
+    onEventClick: (String) -> Unit,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
@@ -136,7 +139,9 @@ fun CrmEventsScreen(
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            items(state.events, key = { it.eventId }) { event -> EventRow(event) }
+                            items(state.events, key = { it.eventId }) { event ->
+                                EventRow(event, onClick = { onEventClick(event.eventId) })
+                            }
                         }
                     }
                 }
@@ -160,8 +165,8 @@ fun CrmEventsScreen(
 }
 
 @Composable
-private fun EventRow(event: CrmEvent) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun EventRow(event: CrmEvent, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
