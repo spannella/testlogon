@@ -110,6 +110,126 @@ export const rotateICloudMount = (body: ICloudRotateReq) =>
 export const revokeICloudMount = (body: ICloudRevokeReq) =>
   api.post<ICloudRevokeResp>("/v1/fs/mounts/icloud/revoke", body);
 
+// ── Generic mount management (SFTP / Drive / OneDrive / S3) ──────────
+// Mirrors app/routers/filemanager.py:
+//   • S3-style FileMount CRUD  (POST/PATCH/DELETE /v1/fs/mounts, /validate)
+//   • host-based provider mounts (POST /v1/fs/mounts/{id}/test,
+//                                 POST /v1/fs/mounts/{id}/rotate-credential,
+//                                 POST /v1/fs/mounts/sftp)
+// All calls degrade gracefully on 404 (feature not enabled) at the call site.
+
+export type FileMountRecord = {
+  id: string;
+  owner: string;
+  provider?: string;
+  mount_path?: string;
+  bucket?: string;
+  prefix?: string | null;
+  mode?: string;
+  auth_ref?: string;
+  status: string;
+  created_at?: string;
+  updated_at?: string;
+  last_check_at?: string | null;
+  last_error?: string | null;
+};
+
+export type FileMountCreateBody = {
+  mount_path: string;
+  bucket: string;
+  prefix?: string | null;
+  mode?: "read_only" | "read_write";
+  auth_ref: string;
+  status?: "active" | "degraded" | "error" | "disabled";
+};
+
+export type FileMountUpdateBody = Partial<FileMountCreateBody>;
+
+// S3-style object-store mount CRUD ------------------------------------
+export const createFileMount = (body: FileMountCreateBody) =>
+  api.post<FileMountRecord>("/v1/fs/mounts", body);
+
+export const updateFileMount = (mountId: string, body: FileMountUpdateBody) =>
+  api.patch<FileMountRecord>(`/v1/fs/mounts/${encodeURIComponent(mountId)}`, body);
+
+export const deleteFileMount = (mountId: string) =>
+  api.del<{ ok: boolean; deleted: boolean }>(`/v1/fs/mounts/${encodeURIComponent(mountId)}`);
+
+export const validateFileMount = (mountId: string) =>
+  api.post<{ ok: boolean; mount_id: string; status: string }>(
+    `/v1/fs/mounts/${encodeURIComponent(mountId)}/validate`,
+  );
+
+// Host-based (SFTP/SCP/FTP) provider mount management -----------------
+export type SftpMountApi = {
+  id: string;
+  owner: string;
+  protocol: string;
+  host: string;
+  port: number;
+  auth_credential_ref: string;
+  remote_root: string;
+  read_only: boolean;
+  status: string;
+  created_at?: string;
+  updated_at?: string;
+  last_tested_at?: string | null;
+  last_status_change_at?: string | null;
+  last_error_code?: string | null;
+  last_error_message?: string | null;
+};
+
+export type SftpMountCreateBody = {
+  protocol?: "sftp" | "scp" | "ftp";
+  host: string;
+  port?: number;
+  auth_credential_ref: string;
+  remote_root: string;
+  read_only?: boolean;
+};
+
+export type SftpMountUpdateBody = {
+  protocol?: "sftp" | "scp" | "ftp";
+  host?: string;
+  port?: number;
+  auth_credential_ref?: string;
+  remote_root?: string;
+  read_only?: boolean;
+  status?: "healthy" | "degraded" | "auth_failed" | "unreachable" | "disabled";
+};
+
+export type SftpRotateCredentialBody = {
+  auth_mode: "password" | "private_key";
+  username: string;
+  password?: string | null;
+  private_key?: string | null;
+  private_key_passphrase?: string | null;
+  auth_credential_ref?: string | null;
+};
+
+export const createSftpMount = (body: SftpMountCreateBody) =>
+  api.post<{ ok: boolean; mount: SftpMountApi }>("/v1/fs/mounts/sftp", body);
+
+export const updateSftpMount = (mountId: string, body: SftpMountUpdateBody) =>
+  api.patch<{ ok: boolean; mount: SftpMountApi }>(
+    `/v1/fs/mounts/${encodeURIComponent(mountId)}`,
+    body,
+  );
+
+export const deleteSftpMount = (mountId: string) =>
+  api.del<{ ok: boolean; mount_id: string }>(`/v1/fs/mounts/${encodeURIComponent(mountId)}`);
+
+export const testMount = (mountId: string) =>
+  api.post<{ ok: boolean; mount: SftpMountApi }>(
+    `/v1/fs/mounts/${encodeURIComponent(mountId)}/test`,
+  );
+
+export const rotateMountCredential = (mountId: string, body: SftpRotateCredentialBody) =>
+  api.post<{ ok: boolean; mount: SftpMountApi; auth_credential_ref: string }>(
+    `/v1/fs/mounts/${encodeURIComponent(mountId)}/rotate-credential`,
+    body,
+  );
+
 export const uploadFile = (
   file: File,
   path: string,

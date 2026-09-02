@@ -36,6 +36,11 @@ fun NavGraphBuilder.filesDestination(navController: NavHostController) {
             onOpenTradingDocuments = {
                 navController.navigate(TradingDocsDest.ROUTE) { launchSingleTop = true }
             },
+            // FM-MOUNTS - storage-mount management (add/list/test/remove providers) reachable from the
+            // file manager. Navigates to the mounts route (files feature graph).
+            onOpenMounts = {
+                navController.navigate(MountsDest.ROUTE) { launchSingleTop = true }
+            },
         )
     }
 }
